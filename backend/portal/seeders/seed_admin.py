@@ -3,7 +3,7 @@
 import os
 
 from portal.extensions import db
-from portal.helpers.auth_helpers import hash_password
+from portal.helpers.auth_helpers import check_password, hash_password
 from portal.models import Role, User
 
 
@@ -19,14 +19,27 @@ def default_users():
 
 
 def run(log=print):
+    """Creates the default users, and keeps them in step with .env: a changed
+    password is re-hashed, and a changed username renames the original user of
+    that role (the oldest one), so its history stays attached."""
     roles = {r.name: r.id for r in Role.query.all()}
-    added = 0
+    added = updated = 0
     for username, password, full_name, role in default_users():
-        if User.query.filter_by(username=username).first() is None:
+        user = User.query.filter_by(username=username).first()
+        if user is None:
+            user = User.query.filter_by(role_id=roles[role]).order_by(User.id).first()
+            if user is not None:
+                user.username = username
+                updated += 1
+        if user is None:
             db.session.add(
                 User(username=username, full_name=full_name, password_hash=hash_password(password),
                      role_id=roles[role], is_active=True)
             )
             added += 1
+            continue
+        if not check_password(password, user.password_hash):
+            user.password_hash = hash_password(password)
+            updated += 1
     db.session.commit()
-    log(f"  users: {added} added")
+    log(f"  users: {added} added, {updated} updated from .env")

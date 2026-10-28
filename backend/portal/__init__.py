@@ -123,3 +123,19 @@ def create_app(config_name=None):
     init_error_handlers(app)
     register_cli(app)
     return app
+
+
+def sync_default_users(app):
+    """Run at server start: ensures the roles and the admin / risk / analyst
+    users exist with the credentials currently in .env."""
+    from portal.seeders import seed_admin, seed_roles
+
+    with app.app_context():
+        try:
+            seed_roles.run(log=app.logger.info)
+            seed_admin.run(log=app.logger.info)
+        except Exception as exc:
+            db.session.rollback()
+            app.logger.warning("Could not sync default users (run `flask db upgrade` first?): %s", exc)
+        finally:
+            db.session.remove()
