@@ -9,4 +9,3 @@ logs/*
 portal/uploads/*
 !portal/uploads/.gitkeep
 evaluation_results.json
-migrations/

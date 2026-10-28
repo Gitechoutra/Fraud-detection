@@ -6,6 +6,8 @@ Flask CLI commands (run from backend/ with the venv active):
     flask create-db          create fraud_sql and fraud_sql_test if missing
     flask init-db-objects    load portal/sql/*.sql (indexes, views, triggers, procedures)
     flask seed               load all demo data (idempotent)
+    flask export-master-data snapshot this DB so teammates get it on `flask db upgrade`
+    flask load-master-data   load that snapshot by hand (--replace for an exact copy)
     flask reset-rules        restore default rule thresholds and weights
     flask show-db-objects    list procedures, triggers and views
     flask simulate-scenario R3
@@ -61,6 +63,34 @@ def register_cli(app):
         from portal.seeds import run_all
 
         run_all(log=click.echo, customers=customers)
+
+    @app.cli.command("export-master-data")
+    @click.option("--master-only", is_flag=True, help="Skip payments, alerts and cases; share only reference data.")
+    def export_master_data_command(master_only):
+        """Snapshot this database so teammates get it with `flask db upgrade`."""
+        from alembic import command
+
+        from portal.services.master_data import export_snapshot, new_revision, write_migration
+
+        config = current_app.extensions["migrate"].migrate.get_config()
+        revision = new_revision()
+        click.echo(f"Exporting from {current_app.config['DB_NAME']}:")
+        export_snapshot(revision, include_history=not master_only, log=click.echo)
+        write_migration(config, revision, log=click.echo)
+        # This database already holds the data, so mark the migration as applied here.
+        command.stamp(config, revision)
+        click.echo("Done. Commit backend/portal/master_data/ and backend/migrations/versions/, then push.")
+
+    @app.cli.command("load-master-data")
+    @click.option("--replace", is_flag=True, help="Empty the shared tables first, for an exact copy.")
+    def load_master_data_command(replace):
+        """Load portal/master_data/snapshot.json.gz into this database."""
+        from portal.services.master_data import load_snapshot
+
+        if replace:
+            click.confirm(f"This deletes the existing rows in {current_app.config['DB_NAME']} first. Continue?",
+                          abort=True)
+        load_snapshot(replace=replace, log=click.echo)
 
     @app.cli.command("reset-rules")
     def reset_rules_command():
