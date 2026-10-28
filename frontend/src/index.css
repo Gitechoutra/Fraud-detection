@@ -1,0 +1,97 @@
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Surfaces as RGB channels so Tailwind can apply opacity (bg-surface/80). */
+:root {
+  --bg: 247 249 252;
+  --surface: 255 255 255;
+  --surface-2: 241 244 249;
+  --line: 226 232 240;
+  --ink: 15 23 42;
+  --muted: 100 116 139;
+  color-scheme: light;
+}
+.dark {
+  --bg: 11 18 32;
+  --surface: 17 26 46;
+  --surface-2: 23 34 58;
+  --line: 34 48 77;
+  --ink: 230 234 242;
+  --muted: 139 152 180;
+  color-scheme: dark;
+}
+
+@layer base {
+  html,
+  body {
+    @apply bg-bg text-ink font-sans antialiased;
+  }
+  body {
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  :focus-visible {
+    @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-bg;
+  }
+  ::selection {
+    background: rgb(99 102 241 / 0.3);
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-line bg-surface shadow-soft;
+  }
+  .input {
+    @apply w-full rounded-xl border border-line bg-surface2 px-3.5 py-2.5 text-sm text-ink placeholder:text-muted/70
+      transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30;
+  }
+  .label {
+    @apply mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted;
+  }
+  /* Figures in UI text: Inter with aligned digits. */
+  .num {
+    @apply tabular-nums;
+  }
+  /* IDs and amounts inside tables: JetBrains Mono. */
+  .mono {
+    @apply font-mono tabular-nums;
+  }
+}
+
+/* Thin, quiet scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--line)) transparent;
+}
+
+/* Recharts: recessive axes and grid that follow the theme */
+.recharts-cartesian-axis-tick-value {
+  fill: rgb(var(--muted));
+  font-size: 11px;
+}
+.recharts-cartesian-grid line {
+  stroke: rgb(var(--line));
+}
+.recharts-legend-item-text {
+  color: rgb(var(--ink)) !important;
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

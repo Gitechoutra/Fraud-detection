@@ -1,0 +1,54 @@
+# FraudShield with Docker:   docker compose up --build   ->  http://localhost:8080
+#
+# The MySQL root password comes from DOCKER_DB_PASSWORD in a git-ignored
+# .env file next to this file (copy .env.example). Without one, a local-only
+# default is used. Other settings (JWT keys, demo users) come from
+# backend/.env when it exists, else from the backend's built-in defaults.
+name: fraudshield
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DOCKER_DB_PASSWORD:-fraudshield-local}
+      MYSQL_DATABASE: fraud_sql
+      TZ: Asia/Kolkata
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    # No host port: only the backend container talks to this MySQL, so it can
+    # never clash with a local MySQL on 3306.
+
+  backend:
+    build: ./backend
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      FLASK_ENV: production
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASSWORD: ${DOCKER_DB_PASSWORD:-fraudshield-local}
+      DB_NAME: fraud_sql
+      FRONTEND_ORIGIN: http://localhost:8080
+      TZ: Asia/Kolkata
+    depends_on:
+      mysql:
+        condition: service_healthy
+    # Reached through Nginx at http://localhost:8080/api (no host port needed).
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  mysql_data:

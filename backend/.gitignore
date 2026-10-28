@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+logs/*
+!logs/.gitkeep
+portal/uploads/*
+!portal/uploads/.gitkeep
+evaluation_results.json
+migrations/

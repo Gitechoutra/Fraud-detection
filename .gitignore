@@ -1,0 +1,27 @@
+# Secrets
+.env
+backend/.env
+frontend/.env
+
+# Python
+backend/venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+backend/logs/*
+!backend/logs/.gitkeep
+backend/portal/uploads/*
+!backend/portal/uploads/.gitkeep
+backend/evaluation_results.json
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
