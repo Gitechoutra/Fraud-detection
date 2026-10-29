@@ -257,7 +257,7 @@ def test_demo_reset_restores_ravi(client, ravi):
     payee = _fraudster_setup(ravi)
     res = otp_shield.request_otp(ravi.id, payee.id, 48000, "SCAM-PHONE-1", "103.21.4.9", "Delhi")
     otp_shield.respond_approval(res["approval_id"], "NO", RAVI["device_id"])
-    token = staff_token(client, "analyst", "Analyst@123")
+    token = staff_token(client, "analyst")
     assert client.post("/api/bank-demo/reset", headers=auth(token)).status_code == 200
     assert scalar("SELECT COUNT(*) FROM watchlist WHERE added_by = 'otp-shield'") == 0
     assert scalar("SELECT COUNT(*) FROM beneficiaries WHERE account_id = :a", {"a": ravi.id}) == 2

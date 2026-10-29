@@ -160,10 +160,22 @@ def fired(result):
     return {h["rule_code"] for h in result["rules"]}
 
 
-def staff_token(client, username="admin", password="Admin@123"):
+def staff_credentials(who="admin"):
+    """(username, password) of the seeded admin / risk / analyst user, from
+    .env (the same ones seed_admin used)."""
+    role = {"admin": "ADMIN", "risk": "RISK_MANAGER", "analyst": "ANALYST"}[who]
+    return next((u, p) for u, p, _, r in seed_admin.default_users() if r == role)
+
+
+def staff_login(client, who="admin"):
+    username, password = staff_credentials(who)
     res = client.post("/api/auth/login", json={"username": username, "password": password})
     assert res.status_code == 200, res.get_json()
-    return res.get_json()["data"]["access_token"]
+    return res.get_json()["data"]
+
+
+def staff_token(client, who="admin"):
+    return staff_login(client, who)["access_token"]
 
 
 def auth(token):

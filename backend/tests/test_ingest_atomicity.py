@@ -83,7 +83,7 @@ def test_api_ingest_requires_key_or_admin(client):
     body = {"external_ref": "API-2", "account_id": acc.id, "amount": 10, "channel": "UPI"}
     assert client.post("/api/transactions", json=body).status_code == 401
     assert client.post("/api/transactions", json=body, headers={"X-API-Key": "wrong"}).status_code == 401
-    token = staff_token(client, "analyst", "Analyst@123")
+    token = staff_token(client, "analyst")
     assert client.post("/api/transactions", json=body, headers=auth(token)).status_code == 403
     token = staff_token(client)
     assert client.post("/api/transactions", json=body, headers=auth(token)).status_code == 201

@@ -32,7 +32,7 @@ def test_each_scenario_triggers_its_rule(population, code):
 
 
 def test_scenarios_over_the_api(client, population):
-    t = auth(staff_token(client, "risk", "Risk@123"))
+    t = auth(staff_token(client, "risk"))
     assert len(client.get("/api/simulator/scenarios", headers=t).get_json()["data"]) == 10
     res = client.post("/api/simulator/scenario/R3", headers=t).get_json()["data"]
     assert res["expected_rule"] == "R3" and res["expected_rule_fired"]
@@ -60,7 +60,7 @@ def test_evaluation_metrics_and_cleanup(population):
 
 def test_evaluation_api_history(client, population):
     evaluator.run_evaluation(size=100, fraud_ratio=0.1, workers=2, seed=5)
-    t = auth(staff_token(client, "risk", "Risk@123"))
+    t = auth(staff_token(client, "risk"))
     latest = client.get("/api/evaluation/latest", headers=t).get_json()["data"]
     assert latest["targets"]["recall"]["target"] == 0.9
     history = client.get("/api/evaluation/history", headers=t).get_json()["data"]
@@ -69,7 +69,7 @@ def test_evaluation_api_history(client, population):
 
 
 def test_live_stream_start_stop(client, population, app):
-    t = auth(staff_token(client, "risk", "Risk@123"))
+    t = auth(staff_token(client, "risk"))
     started = client.post("/api/simulator/stream/start", json={"rate": 5, "fraud_ratio": 0.0}, headers=t)
     assert started.get_json()["data"]["running"] is True
     deadline = time.time() + 10

@@ -3,18 +3,19 @@
 from datetime import timedelta
 
 from portal.helpers.db_helpers import scalar
-from tests.conftest import NOON, auth, make_account, pay, staff_token
+from tests.conftest import NOON, auth, make_account, pay, staff_credentials, staff_login, staff_token
 
 
 # --- auth -----------------------------------------------------------------
 
 def test_login_success_and_me(client):
-    res = client.post("/api/auth/login", json={"username": "analyst", "password": "Analyst@123"})
+    username, password = staff_credentials("analyst")
+    res = client.post("/api/auth/login", json={"username": username, "password": password})
     assert res.status_code == 200
     data = res.get_json()["data"]
     assert data["user"]["role"] == "ANALYST" and data["access_token"] and data["refresh_token"]
     me = client.get("/api/auth/me", headers=auth(data["access_token"]))
-    assert me.get_json()["data"]["username"] == "analyst"
+    assert me.get_json()["data"]["username"] == username
     assert scalar("SELECT COUNT(*) FROM audit_log WHERE action = 'LOGIN'") == 1
 
 
@@ -30,7 +31,7 @@ def test_login_validation(client):
 
 
 def test_refresh_gives_new_access_token(client):
-    data = client.post("/api/auth/login", json={"username": "risk", "password": "Risk@123"}).get_json()["data"]
+    data = staff_login(client, "risk")
     res = client.post("/api/auth/refresh", headers=auth(data["refresh_token"]))
     assert res.status_code == 200
     new_token = res.get_json()["data"]["access_token"]
@@ -40,7 +41,7 @@ def test_refresh_gives_new_access_token(client):
 
 
 def test_logout_revokes_access_and_refresh(client):
-    data = client.post("/api/auth/login", json={"username": "admin", "password": "Admin@123"}).get_json()["data"]
+    data = staff_login(client, "admin")
     res = client.post("/api/auth/logout", json={"refresh_token": data["refresh_token"]},
                       headers=auth(data["access_token"]))
     assert res.status_code == 200
@@ -68,7 +69,7 @@ def test_disabled_user_cannot_log_in(client):
 # --- role checks ------------------------------------------------------------
 
 def test_analyst_permissions(client):
-    t = auth(staff_token(client, "analyst", "Analyst@123"))
+    t = auth(staff_token(client, "analyst"))
     assert client.get("/api/rules", headers=t).status_code == 200
     assert client.put("/api/rules/R2", json={"weight": 30}, headers=t).status_code == 403
     assert client.post("/api/watchlist", json={"entry_type": "IP", "entry_value": "1.2.3.4", "reason": "test"},
@@ -80,7 +81,7 @@ def test_analyst_permissions(client):
 
 
 def test_risk_manager_permissions(client):
-    t = auth(staff_token(client, "risk", "Risk@123"))
+    t = auth(staff_token(client, "risk"))
     res = client.put("/api/rules/R2", json={"param_1": 7, "weight": 30}, headers=t)
     assert res.status_code == 200 and res.get_json()["data"]["params"][0] == 7.0
     assert client.get("/api/audit", headers=t).status_code == 200
@@ -114,7 +115,7 @@ def _flagged_payment():
 def test_transactions_list_latest_detail(client):
     acc, result = _flagged_payment()
     pay(acc, 300, at=NOON + timedelta(minutes=30))
-    t = auth(staff_token(client, "analyst", "Analyst@123"))
+    t = auth(staff_token(client, "analyst"))
     listed = client.get("/api/transactions?status=BLOCKED&per_page=5", headers=t).get_json()["data"]
     assert listed["total"] >= 1 and listed["items"][0]["status"] == "BLOCKED"
     assert "R6" in listed["items"][0]["rule_codes"]
@@ -132,7 +133,7 @@ def test_transactions_list_latest_detail(client):
 
 def test_alerts_and_cases_workflow(client):
     _, result = _flagged_payment()
-    t = auth(staff_token(client, "analyst", "Analyst@123"))
+    t = auth(staff_token(client, "analyst"))
     alerts = client.get("/api/alerts?status=OPEN", headers=t).get_json()["data"]
     assert alerts["counts"]["OPEN"] == 1
     alert = alerts["items"][0]
@@ -157,7 +158,7 @@ def test_alerts_and_cases_workflow(client):
 
 
 def test_rules_and_bands(client):
-    t = auth(staff_token(client, "risk", "Risk@123"))
+    t = auth(staff_token(client, "risk"))
     data = client.get("/api/rules", headers=t).get_json()["data"]
     assert len(data["rules"]) == 9 and data["bands"] == {"review_threshold": 40, "block_threshold": 70}
     assert client.put("/api/rules/R1", json={"is_active": False}, headers=t).get_json()["data"]["is_active"] is False
@@ -170,7 +171,7 @@ def test_rules_and_bands(client):
 
 
 def test_watchlist_crud(client):
-    t = auth(staff_token(client, "risk", "Risk@123"))
+    t = auth(staff_token(client, "risk"))
     res = client.post("/api/watchlist", json={"entry_type": "IP", "entry_value": "9.9.9.9", "reason": "Test entry"},
                       headers=t)
     assert res.status_code == 201
