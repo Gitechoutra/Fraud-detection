@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-# Fraud-detection
-=======
 # FraudShield — SQL-based real-time fraud detection & transaction monitoring
 
 FraudShield checks every bank, card and UPI payment **before the money moves**. Each payment is
@@ -215,4 +212,3 @@ fraudshield/
 
 Further reading: [API reference](backend/docs/API.md) · [The 9 rules](backend/docs/RULES.md) ·
 [Architecture](backend/docs/ARCHITECTURE.md).
->>>>>>> 8831528 (Fraude detection)
