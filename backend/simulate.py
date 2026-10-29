@@ -16,10 +16,10 @@ import sys
 import time
 from datetime import datetime
 
-from evaluate import api_reachable, http_submitter
 from portal import create_app
 from portal.extensions import db
 from portal.services import simulator
+from portal.services.evaluator import api_reachable, http_submitter
 
 ACCOUNT_SPACING = 150
 

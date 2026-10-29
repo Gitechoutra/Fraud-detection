@@ -12,6 +12,7 @@ from portal.helpers.explain import inr
 from portal.helpers.responses import AppError, ok
 from portal.helpers.validators import CaseNoteSchema, CaseOutcomeSchema, load
 from portal.models import Alert, Case, CaseNote
+from portal.services import fraud_engine
 
 cases_bp = Blueprint("cases", __name__, url_prefix="/cases")
 
@@ -123,5 +124,8 @@ def set_outcome(case_id):
     alert.updated_at = now
     if data.get("notes"):
         db.session.add(CaseNote(case_id=case.id, author_id=me.id, body=data["notes"], created_at=now))
+    if case.outcome == "FALSE_POSITIVE" and alert.txn_id:
+        # A genuine payment: lift the R9 holds and watchlist entries it caused.
+        fraud_engine.r9_release(alert.txn_id)
     db.session.commit()
     return ok({"id": case.id, "outcome": case.outcome, "closed_at": now.isoformat()})

@@ -83,6 +83,9 @@ class BaseConfig:
 
     SCHEDULER_ENABLED = True
 
+    # Customer app demo data and the fraudster simulation console (/attacker).
+    DEMO_MODE = env("DEMO_MODE", "true").lower() in ("1", "true", "yes")
+
 
 class DevelopmentConfig(BaseConfig):
     ENV_NAME = "development"
@@ -101,6 +104,8 @@ class TestingConfig(BaseConfig):
 
 class ProductionConfig(BaseConfig):
     ENV_NAME = "production"
+    # The simulation console must be switched on deliberately in production.
+    DEMO_MODE = env("DEMO_MODE", "false").lower() in ("1", "true", "yes")
 
 
 CONFIGS = {

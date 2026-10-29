@@ -58,6 +58,9 @@ port 5000 and the web app on port 5173 — and your browser opens **http://local
 
 Demo bank customer (used automatically by the OTP Shield page): **`ravi.kumar` / `Ravi@123`**.
 
+The landing page has three entrances — **Bank staff** (the logins above), **Customer app** and
+**Fraudster demo** — plus a **split-screen demo**. See section 3a.
+
 To stop, close the two server windows.
 
 ### Run with Docker instead
@@ -71,6 +74,101 @@ own MySQL inside the Docker network — it never clashes with your local MySQL �
 schema and loads the demo data on first start (about a minute). To choose the Docker MySQL
 password, copy `.env.example` (project folder) to `.env` and edit `DOCKER_DB_PASSWORD`.
 Stop with `docker compose down` (add `-v` to also delete the Docker database).
+
+## 3a. Customer app, fraudster console and split-screen demo
+
+Three separate experiences share one backend and one fraud engine:
+
+| Who | URL | Login | Token kind |
+|---|---|---|---|
+| Bank staff | `/login` → `/app` | `admin` / `risk` / `analyst` (above) | `staff` |
+| Customer (banking app) | `/bank` | `ravi`, `priya`, `suresh`, `lakshmi`, `arjun` — password **`Name@123`** (e.g. `Ravi@123`, `Lakshmi@123`) | `customer` |
+| Fraudster (simulation console) | `/attacker` | `hacker1` (Delhi Gang), `hacker2` (Mumbai Crew) — password **`Hacker@123`** | `fraudster` |
+| Split screen | `/demo` | log in on each side | — |
+
+Token kinds never cross: a staff token is refused by customer and fraudster endpoints and vice
+versa; customers only ever see their own account (ids come from the token, never the request).
+
+**Demo customers.** Ravi (Hyderabad, the OTP Shield customer), Priya (Bengaluru, high spender),
+Suresh (Chennai), **Lakshmi (Hyderabad, dormant — no activity for ~7 months)** and Arjun (Pune). Each
+has a balance, a trusted phone, a debit card (`CARD-nnnn`), two long-standing payees and 90 days of
+everyday payments. hacker1 holds stolen credentials for Ravi (phishing link), Suresh (card skimming),
+Lakshmi (SIM swap) and Priya (OTP call); hacker2 for Arjun, Priya, Lakshmi and Suresh. The gang's
+mule account (`99887766554433`) is on the watchlist.
+
+**Setup.** `flask db upgrade` creates the new tables (`customer_users`, `fraudster_users`,
+`stolen_credentials`, `customer_alerts`, `attack_events`, plus `accounts.held_amount`,
+`transactions.funds_status`, `cases.customer_response`) without touching existing data; `flask seed`
+(or just `flask seed-demo`) adds the demo logins. Both are safe to run again.
+**Between demos:** press **Reset demo** in the fraudster console or run `flask seed-demo --reset` — it
+puts the five demo accounts back to their seeded balances and removes their demo payments, alerts,
+holds and the watchlist entries those payments created (the seeded mule entry stays).
+
+**Money rules** (`backend/portal/services/funds.py`, applied inside the same database transaction as
+the decision):
+
+| Decision / answer | Money |
+|---|---|
+| APPROVED | debited from the balance |
+| REVIEW | reserved in `held_amount` — not paid |
+| BLOCKED | nothing moves |
+| Customer: **This was me** (password re-entered) | hold released and the payment completed — exactly once |
+| Customer: **Not me** | hold released, nothing paid; fraudster's session ended; device, IP and payee watchlisted; staff case marked |
+
+Every money change is a conditional `UPDATE` (e.g. "only if still HELD"), so retries and double
+clicks cannot pay twice, and CHECK constraints keep `balance >= 0` and `0 <= held_amount <= balance`.
+Customer payments carry an idempotency key, are limited to ₹2,00,000 each and ₹5,00,000 a day, and
+are refused (and not saved) without enough available balance. Synthetic traffic — seeded history,
+evaluations and the Fraud Lab / live stream — exercises the rules but moves no money.
+
+**How the fraudster console works.** Each button (R1–R9, *Run combined attack*) calls
+`POST /api/attacker/attack/<code>`; the server builds the payments for a victim whose credentials that
+fraudster holds and sends each one through `fraud_engine.ingest()`, so `sp_evaluate_transaction`
+decides and the console shows the bank's real decision, the rules that fired, the reference and what
+happened to the money. R9 first asks **OTP Shield** for an OTP exactly as the bank app does. Late-night
+and burst patterns use a server-side simulation clock (the payment time is set to 02:15, or a few
+minutes apart); the rules are unchanged. Amounts, payees and timing are fixed by the server — the
+console is not a free-form attack tool — and it only works while `DEMO_MODE` is on (default on in
+development, **off in the production config**).
+
+**Device and location.** The browser keeps a random device id in `localStorage` (one per role), so a
+normal window keeps its device and a private/incognito window is a new device. It sends the id and the
+chosen demo city as `X-Device-Id` / `X-Demo-City`. They are only inputs to the rules — a device becomes
+trusted only after the server verifies the customer — and the network address is never taken from the
+client (on localhost a stable demo address is derived from the device id).
+
+**Customer alerts.** The app polls `GET /api/customer/alerts` every 2 seconds; a new held or blocked
+payment appears within one poll with a red animated alert and a sound (a visual "sound is blocked —
+tap to enable" fallback appears when the browser blocks audio). The one-sentence reason is the fired
+rule's own plain-English explanation from `fraud_rules`. Staff see the customer's answer — *Waiting*,
+*This was me* or *Not me* — on the Alerts page and the case page.
+
+### Three-minute demo script
+
+Before starting: run `flask seed-demo --reset` (or press **Reset demo**), open `/demo`, log in on the
+left as **hacker1 / Hacker@123** and on the right as **lakshmi / Lakshmi@123**; open `/login` in another
+tab as **analyst / Analyst@123** on the **Alerts** page.
+
+1. **0:00–0:30 — Three roles.** On the landing page show the three entrances: bank staff, the customer
+   app and the fraudster demo. Open the split screen.
+2. **0:30–1:00 — The fraudster.** Left side: hacker1 "Delhi Gang", the SIMULATION ONLY banner, and the
+   stolen credentials — Lakshmi's via SIM swap (note: dormant). Passwords are never shown.
+3. **1:00–1:30 — The attack.** Press **R8 · Sleeping account**. The console shows the bank's real
+   decision: **REVIEW**, rule **R8** ("No activity for ~210 days, then suddenly ₹22,000"), the reference,
+   and "money on hold".
+4. **1:30–2:00 — The customer's phone.** Right side: within two seconds Lakshmi's phone shows the red
+   alert with a sound — *On hold: ₹22,000 — was this you?* — and the home screen shows ₹22,000 on hold.
+5. **2:00–2:30 — "Not me".** Tap **Not me** → *Report*. The hold is released (available balance back to
+   ₹2,60,000, nothing paid); the fraudster console is logged out ("The bank ended your session"); the
+   device and IP are on the watchlist.
+6. **2:30–3:00 — Staff view.** In the analyst tab the alert shows **Customer: Not me** and money
+   "hold released"; open the case to show the badge and the audit timeline. Back on the phone, Home
+   shows balance ₹2,60,000 and ₹0 on hold.
+
+Alternatives: **R9 · Phishing + OTP call** on Ravi shows OTP Shield refusing to create an OTP and the
+transfer being **BLOCKED**; **Run combined attack** plays cloned card → card testing → net-banking
+takeover to the mule account. To show *This was me*, attack again (after a reset) and confirm with the
+customer's password: the held money is paid once and the phone becomes trusted.
 
 ## 4. What's where
 
@@ -87,6 +185,9 @@ Stop with `docker compose down` (add `-v` to also delete the Docker database).
 | **OTP Shield demo** | Two phones side by side: the fraudster's and Ravi's |
 | **Evaluation** | Recall, false alarms, precision, F1, speed and throughput against the targets |
 | **Watchlist / Audit log / Users** | Known-bad devices and accounts · who changed what · staff accounts |
+| **Customer app** (`/bank`) | Phone-style banking app: Home (balance, on hold), Pay, Alerts (bell + unread badge), History, Profile |
+| **Fraudster demo** (`/attacker`) | Simulation console: stolen credentials, one button per rule R1–R9, combined attack, live results |
+| **Split screen** (`/demo`) | Fraudster console and the victim's phone side by side |
 
 ## 5. A 5-minute viva demo
 
@@ -125,10 +226,15 @@ From the `backend` folder with the virtual environment active (`venv\Scripts\act
 | `flask init-db-objects` | (Re)load indexes, views, triggers and stored procedures |
 | `flask show-db-objects` | List procedures, functions, triggers and views |
 | `flask seed` | Load demo data (safe to repeat) |
-| `flask reset-rules` | Put rule limits and points back to the defaults |
+| `flask reset-rules` | Put rule limits and points back to the defaults (`--spec-weights`: the specification's Table 4.4 weights) |
+| `flask benchmark-indexes` | Load test through the running API with and without the composite indexes |
+| `flask verify-audit` | Re-compute the audit log's hash chain (tamper check) |
+| `flask export-ddl` | Rewrite `docs/schema.sql`, the CREATE TABLE script |
+| `flask evaluation-report` | Evaluate against Table 3.1 through the running API and write `docs/EVALUATION.md` plus the labelled data set `docs/evaluation_dataset.csv` (`--skip-benchmark`, `--size`, `--seed`) |
+| `flask export-dataset --size 5000` | Only the labelled data set CSV |
 | `flask export-master-data` | Snapshot your database so teammates get it on `flask db upgrade` (see below) |
 | `flask load-master-data --replace` | Make this database an exact copy of the snapshot (deletes its rows first) |
-| `flask simulate-scenario R3` | Run one fraud story and print the decision |
+| `flask simulate-scenario R3` | Run one fraud story (or a combination such as `R1+R4`) and print the decision |
 | `python simulate.py --rate 5 --fraud-ratio 0.03 --minutes 2` | Stream payments to the running API |
 | `python evaluate.py` | Evaluate 5,000 labelled payments through the running API |
 | `python -m pytest` | Run the test suite (uses a temporary `fraude_test` database that it drops when done; never touches `fraude`) |
@@ -165,6 +271,11 @@ other.
 | Strange characters (`â‚¹`) in a console window | Cosmetic only. The scripts switch the console to UTF-8; in your own window run `chcp 65001`. |
 | OTP Shield says “Too many OTP requests” | Press **Replay story** — it resets Ravi's demo data, including the 5-per-10-minutes OTP limit. |
 | I changed rules and want the defaults back | `flask reset-rules` |
+| A fraudster attack shows APPROVED (e.g. R1) | That rule's points are below the 40-point hold line in your database (R1 is 35 in the shipped `fraude` data, the seed default is 40). Raise it on the Rules page or run `flask reset-rules`. |
+| Every attack is now BLOCKED by R6 | An earlier "Not me" or R9 put the fraudster's device/IP on the watchlist — realistic. Press **Reset demo**, or click "new phone" in the console. |
+| Customer app says "This login is locked" | Five wrong passwords lock a customer login; `flask seed-demo --reset` unlocks the demo users. |
+| No sound on the customer's alert | Browsers block audio until you click the page; the red alert still appears with a "tap to enable" button. |
+| `PermissionError ... app.log -> app.log.1` printed by a `flask` command | Harmless on Windows: the running API holds the log file open, so another process can't rotate it. |
 | Start completely fresh | In MySQL Workbench: `DROP DATABASE fraude;` then run `setup.bat` again. |
 
 ## 8. Decisions made while building
@@ -201,10 +312,10 @@ other.
 fraudshield/
 ├── backend/            Flask API, SQL engine, seeders, tests, docs
 │   ├── portal/sql/     01_indexes · 02_views · 03_triggers · 04_sp_evaluate_transaction · 05_sp_otp_risk_check
-│   ├── portal/services fraud_engine · otp_shield · notifier · simulator · evaluator
-│   ├── portal/api/     one blueprint per area (14)
+│   ├── portal/services fraud_engine · funds · customer_care · attacker · otp_shield · notifier · simulator · evaluator
+│   ├── portal/api/     one blueprint per area (17, incl. customer_api, attacker_api, demo_api)
 │   ├── docs/           API.md · RULES.md · ARCHITECTURE.md
-│   └── tests/          rules R1–R9, scoring, OTP Shield, auth/RBAC, atomicity, performance
+│   └── tests/          rules R1–R9, scoring, OTP Shield, auth/RBAC, atomicity, performance, customer app & fraudster demo
 ├── frontend/           React 18 + Vite + Tailwind + Framer Motion + Recharts
 ├── docker-compose.yml  mysql + backend + frontend (Nginx) → http://localhost:8080
 └── start_all.bat       start everything on Windows
@@ -212,3 +323,30 @@ fraudshield/
 
 Further reading: [API reference](backend/docs/API.md) · [The 9 rules](backend/docs/RULES.md) ·
 [Architecture](backend/docs/ARCHITECTURE.md).
+
+API testing in Postman: import `backend/docs/FraudShield.postman_collection.json`, set `password` (and `username`) in the collection variables, and run it top to bottom.
+
+## 10. Tests
+
+```bat
+cd backend
+venv\Scripts\activate
+python -m pytest                 :: 152 tests; uses a temporary fraude_test database it drops afterwards
+cd ..\frontend
+npm test                         :: device-id / alert de-duplication tests (Node's built-in runner)
+npm run build                    :: production build of the web app
+```
+
+The backend suite covers the nine rules through the stored procedure, scoring, OTP Shield, staff RBAC,
+atomic ingest and idempotency, evaluation, the audit hash chain, and (in
+`tests/test_customer_and_fraudster.py`) customer/fraudster authentication and isolation, each attack
+R1–R9 and the combined attack through `fraud_engine.ingest`, approved/held/blocked money handling,
+"This was me" (paid exactly once) and "Not me" (hold released, fraudster logged out, watchlist, case
+status), and the demo reset.
+
+**Known limitations.** The customer app, fraudster console and split screen were verified by the API
+tests and a production build, not by automated browser tests (there is no browser-test tooling in
+the project), so sound playback and animations are only checked by hand. Alert delivery is polling
+(every 2 s), not push. The customer app pays existing payees only (adding payees remains in the OTP
+Shield demo bank). The fraudster console is a local simulation and is disabled when `DEMO_MODE` is off.
+

@@ -25,5 +25,12 @@ from portal.models.alert import Alert  # noqa: F401
 from portal.models.case import Case, CaseNote  # noqa: F401
 from portal.models.device_approval import DeviceApproval  # noqa: F401
 from portal.models.notification import Notification  # noqa: F401
-from portal.models.audit_log import AuditLog  # noqa: F401
+from portal.models.audit_log import AuditChain, AuditLog  # noqa: F401
 from portal.models.metric_run import DailyStat, MetricRun  # noqa: F401
+from portal.models.demo_users import (  # noqa: F401
+    AttackEvent,
+    CustomerAlert,
+    CustomerUser,
+    FraudsterUser,
+    StolenCredential,
+)

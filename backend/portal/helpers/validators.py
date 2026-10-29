@@ -44,6 +44,8 @@ class TransactionSchema(BaseSchema):
     device_id = fields.String(load_default=None, validate=validate.Length(max=64))
     ip_address = fields.String(load_default=None, validate=validate.Length(max=45))
     txn_time = fields.DateTime(load_default=None)
+    # Optional score (0-100) from an external ML model; see MODEL_SCORE_WEIGHT.
+    model_score = fields.Integer(load_default=None, allow_none=True, validate=validate.Range(min=0, max=100))
     is_fraud_label = fields.Boolean(load_default=None, allow_none=True)
     scenario = fields.String(load_default=None, validate=validate.Length(max=16))
     source = fields.String(load_default=None, validate=validate.Length(max=16))
@@ -58,6 +60,11 @@ class AlertUpdateSchema(BaseSchema):
     assign_to_me = fields.Boolean(load_default=False)
     assigned_to = fields.Integer(load_default=None, allow_none=True)
     alert_status = fields.String(load_default=None, validate=validate.OneOf(["OPEN", "IN_PROGRESS", "CLOSED"]))
+
+
+class AlertSeenSchema(BaseSchema):
+    alert_ids = fields.List(fields.Integer(validate=validate.Range(min=1)), required=True,
+                            validate=validate.Length(max=100))
 
 
 class CaseNoteSchema(BaseSchema):
@@ -81,6 +88,7 @@ class RuleUpdateSchema(BaseSchema):
 class BandsSchema(BaseSchema):
     review_threshold = fields.Integer(required=True, validate=validate.Range(min=1, max=99))
     block_threshold = fields.Integer(required=True, validate=validate.Range(min=2, max=100))
+    model_weight = fields.Integer(load_default=None, validate=validate.Range(min=0, max=100))
 
     @validates_schema
     def hold_below_block(self, data, **kwargs):
@@ -150,3 +158,29 @@ class StreamStartSchema(BaseSchema):
 class EvaluationRunSchema(BaseSchema):
     size = fields.Integer(load_default=1000, validate=validate.Range(min=100, max=20000))
     fraud_ratio = fields.Float(load_default=0.03, validate=validate.Range(min=0.005, max=0.5))
+
+
+class DemoLoginSchema(BaseSchema):
+    """Customer-app and fraudster-console logins."""
+    username = fields.String(required=True, validate=validate.Regexp(r"^[a-z0-9_.-]{2,64}$", error="Unknown user."))
+    password = fields.String(required=True, validate=validate.Length(min=1, max=128))
+
+
+# Customer-app payment limits (per payment and per day).
+CUSTOMER_PAYMENT_MAX = 200000
+CUSTOMER_DAILY_MAX = 500000
+
+
+class CustomerPaymentSchema(BaseSchema):
+    beneficiary_id = fields.Integer(required=True, validate=validate.Range(min=1))
+    amount = fields.Decimal(required=True, places=2, validate=validate.Range(min=1, max=CUSTOMER_PAYMENT_MAX))
+    channel = fields.String(load_default="UPI", validate=validate.OneOf(["UPI", "NETBANKING"]))
+    note = fields.String(load_default=None, validate=validate.Length(max=120))
+    # Client-generated per payment attempt; a retried request with the same
+    # key returns the first decision instead of paying again.
+    idempotency_key = fields.String(required=True, validate=validate.Regexp(r"^[A-Za-z0-9-]{8,40}$"))
+
+
+class ConfirmAlertSchema(BaseSchema):
+    password = fields.String(required=True, validate=validate.Length(min=1, max=128))
+

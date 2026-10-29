@@ -3,8 +3,9 @@
 from flask import Blueprint, request
 
 from portal.helpers.auth_helpers import min_role
-from portal.helpers.responses import page_args, paginated
+from portal.helpers.responses import ok, page_args, paginated
 from portal.models import AuditLog
+from portal.services import audit_chain
 
 audit_bp = Blueprint("audit", __name__, url_prefix="/audit")
 
@@ -23,3 +24,10 @@ def list_audit():
     total = query.count()
     rows = query.order_by(AuditLog.logged_at.desc(), AuditLog.id.desc()).offset(offset).limit(per_page).all()
     return paginated([r.to_dict() for r in rows], total, page, per_page)
+
+
+@audit_bp.get("/verify")
+@min_role("RISK_MANAGER")
+def verify_audit():
+    """Re-computes the hash chain: proves no audit entry was changed or removed."""
+    return ok(audit_chain.verify())

@@ -5,7 +5,7 @@ import { useCallback, useState } from 'react';
 import toast from 'react-hot-toast';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { errorMessage } from '../api/client';
-import { evaluationApi } from '../api/endpoints';
+import { alertApi, evaluationApi } from '../api/endpoints';
 import ChartTooltip from '../components/charts/ChartTooltip';
 import PageShell from '../components/layout/PageShell';
 import AnimatedNumber from '../components/ui/AnimatedNumber';
@@ -22,7 +22,21 @@ const TARGET_TEXT = {
   fpr: { label: 'False alarms (FPR)', plain: 'Of genuine payments, how many were wrongly flagged', fmt: (v) => pct(v, 2), goal: (t) => `≤ ${pct(t, 0)}` },
   p95_ms: { label: 'Speed (p95)', plain: '95% of decisions were faster than this', fmt: (v) => `${Number(v).toFixed(1)} ms`, goal: (t) => `≤ ${t} ms` },
   tps: { label: 'Throughput', plain: 'Payments checked per second', fmt: (v) => `${Number(v).toFixed(0)}/s`, goal: (t) => `≥ ${t}/s` },
+  explainability: {
+    label: 'Explainability',
+    plain: 'Flagged payments that list the rules behind them',
+    fmt: (v) => pct(v, 1),
+    goal: (t) => `${pct(t, 0)}`,
+  },
+  alert_visible_ms: {
+    label: 'New alert on screen',
+    plain: 'Worst case: decision + queue read + 2 s refresh',
+    fmt: (v) => `${(Number(v) / 1000).toFixed(2)} s`,
+    goal: (t) => `≤ ${t / 1000} s`,
+  },
 };
+const TARGET_KEYS = Object.keys(TARGET_TEXT);
+
 
 function TargetTile({ k, t, delay }) {
   const meta = TARGET_TEXT[k];
@@ -45,6 +59,83 @@ function TargetTile({ k, t, delay }) {
         target {meta.goal(t.target)} · {meta.plain}
       </p>
     </motion.div>
+  );
+}
+
+function IndexBenchmark({ bench }) {
+  if (!bench) {
+    return (
+      <p className="text-sm text-muted">
+        No benchmark yet. Run <span className="mono">flask benchmark-indexes</span> in backend/ to evaluate the same payments with and without the
+        composite (account, time) indexes.
+      </p>
+    );
+  }
+  const rows = [
+    ['p50 decision time', 'p50_ms', (v) => `${v.toFixed(1)} ms`],
+    ['p95 decision time', 'p95_ms', (v) => `${v.toFixed(1)} ms`],
+    ['Throughput', 'tps', (v) => `${v.toFixed(0)}/s`],
+    ['Recall', 'recall', (v) => pct(v)],
+  ];
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-line text-left text-xs uppercase tracking-wide text-muted">
+            <th className="py-2 font-medium" />
+            <th className="py-2 text-right font-medium">With indexes</th>
+            <th className="py-2 text-right font-medium">Without</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([label, key, fmt]) => (
+            <tr key={key} className="border-b border-line/60 last:border-0">
+              <td className="py-2">{label}</td>
+              <td className="num py-2 text-right">{fmt(bench.indexed[key])}</td>
+              <td className="num py-2 text-right">{fmt(bench.no_index[key])}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-3 text-xs text-muted">
+        {num(bench.indexed.total)} labelled payments per run · p95 {bench.p95_speedup}× faster and throughput {bench.tps_gain}× higher with the indexes ·
+        runs #{bench.indexed.run_id} and #{bench.no_index.run_id}, {shortDate(bench.no_index.run_at)}
+      </p>
+    </div>
+  );
+}
+
+function MeasuredFreshness({ f }) {
+  if (!f) return null;
+  const has = f.measured > 0;
+  return (
+    <div className="card mt-3 flex flex-wrap items-center gap-x-6 gap-y-1 p-4 text-sm">
+      <span className="font-medium">New alert on screen — measured in the Alerts page</span>
+      {has ? (
+        <>
+          <span className="num">p50 {(f.p50_ms / 1000).toFixed(2)} s</span>
+          <span className="num">p95 {(f.p95_ms / 1000).toFixed(2)} s</span>
+          <span className="num text-muted">max {(f.max_ms / 1000).toFixed(2)} s</span>
+          <span
+            className={clsx(
+              'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',
+              f.pass ? 'bg-approved-soft text-approved' : 'bg-blocked-soft text-blocked',
+            )}
+          >
+            {f.pass ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
+            {f.pass ? 'Target met' : 'Missed'} (≤ {f.target_ms / 1000} s)
+          </span>
+          <span className="w-full text-xs text-muted">
+            {num(f.measured)} alerts over the last {f.days} days: time from the alert being saved with its decision to the Alerts page first showing it
+            (both stamped by the database clock).
+          </span>
+        </>
+      ) : (
+        <span className="text-xs text-muted">
+          Nothing measured yet — keep the Alerts page open while payments are flagged (e.g. start live traffic in the Fraud Lab).
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -92,14 +183,24 @@ export default function Evaluation() {
   const [latest, setLatest] = useState(undefined);
   const [history, setHistory] = useState([]);
   const [progress, setProgress] = useState(null);
+  const [bench, setBench] = useState(null);
+  const [fresh, setFresh] = useState(null);
   const [size, setSize] = useState(2000);
 
   const load = useCallback(async () => {
     try {
-      const [l, h, p] = await Promise.all([evaluationApi.latest(), evaluationApi.history(), evaluationApi.status()]);
+      const [l, h, p, b, f] = await Promise.all([
+        evaluationApi.latest(),
+        evaluationApi.history(),
+        evaluationApi.status(),
+        evaluationApi.indexBenchmark(),
+        alertApi.freshness(),
+      ]);
       setLatest(l);
       setHistory(h.runs);
       setProgress(p);
+      setBench(b);
+      setFresh(f);
     } catch (err) {
       toast.error(errorMessage(err));
     }
@@ -166,11 +267,12 @@ export default function Evaluation() {
         </Card>
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {['recall', 'fpr', 'p95_ms', 'tps'].map((k, i) => (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {TARGET_KEYS.filter((k) => latest.targets[k]).map((k, i) => (
               <TargetTile key={k} k={k} t={latest.targets[k]} delay={i * 0.05} />
             ))}
           </div>
+          <MeasuredFreshness f={fresh} />
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <Card title="What it got right and wrong" subtitle={`Run #${latest.id} · ${num(latest.total)} labelled payments · ${latest.mode === 'API' ? 'over HTTP' : 'in-process'}`}>
               <Confusion run={latest} />
@@ -218,6 +320,43 @@ export default function Evaluation() {
                   </tbody>
                 </table>
               </div>
+            </Card>
+          </div>
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <Card title="Fraud that trips several rules" subtitle="Stories built to fire a combination of rules: were all of them found, and was the payment stopped?">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-line text-left text-xs uppercase tracking-wide text-muted">
+                      <th className="py-2 font-medium">Story</th>
+                      <th className="py-2 text-right font-medium">All rules fired</th>
+                      <th className="py-2 text-right font-medium">Recall</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {latest.per_scenario
+                      .filter((s) => s.scenario.includes('+'))
+                      .map((s) => (
+                        <tr key={s.scenario} className="border-b border-line/60 last:border-0">
+                          <td className="py-2">
+                            <span className="num mr-2 text-xs text-muted">{s.scenario}</span>
+                            {s.scenario.split('+').map((c) => RULES[c].name).join(' + ')}
+                          </td>
+                          <td className="num py-2 text-right">
+                            {s.rule_fired}/{s.count}
+                          </td>
+                          <td className="num py-2 text-right">{s.recall == null ? '—' : pct(s.recall, 0)}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+                {!latest.per_scenario.some((s) => s.scenario.includes('+')) && (
+                  <p className="pt-2 text-xs text-muted">This run is older than the combination stories — run a new evaluation.</p>
+                )}
+              </div>
+            </Card>
+            <Card title="With and without indexes" subtitle="The same labelled payments, once with the composite (account, time) indexes and once without.">
+              <IndexBenchmark bench={bench} />
             </Card>
           </div>
           {chart.length > 1 && (

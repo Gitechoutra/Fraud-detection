@@ -148,10 +148,25 @@ def sql_files():
     return sorted(f for f in os.listdir(SQL_DIR) if f.endswith(".sql"))
 
 
-def load_sql_objects(connection=None, log=print):
-    """Executes every portal/sql/*.sql file in name order. Safe to re-run:
-    views use CREATE OR REPLACE, triggers/procedures are dropped first, and
-    an index that already exists is skipped.
+def load_sql_objects_if_head(connection, revision, log=print):
+    """For migrations: the SQL files always describe the *latest* schema, so
+    only the newest migration may load them all (an older one, replayed on a
+    fresh database, would reference columns that do not exist yet). Returns
+    True if this revision is the head and the files were loaded."""
+    from alembic import context
+    from alembic.script import ScriptDirectory
+
+    if revision not in ScriptDirectory.from_config(context.config).get_heads():
+        log("  SQL objects: loaded by a later migration")
+        return False
+    load_sql_objects(connection, log=log)
+    return True
+
+
+def load_sql_objects(connection=None, log=print, files=None):
+    """Executes every portal/sql/*.sql file in name order (or just `files`).
+    Safe to re-run: views use CREATE OR REPLACE, triggers/procedures are
+    dropped first, and an index that already exists is skipped.
 
     `connection` is a SQLAlchemy Connection (Alembic passes its own); default
     is the app's engine.
@@ -160,7 +175,7 @@ def load_sql_objects(connection=None, log=print):
     conn = db.engine.connect() if own else connection
     try:
         dbapi = conn.connection.dbapi_connection
-        for fname in sql_files():
+        for fname in files or sql_files():
             with open(os.path.join(SQL_DIR, fname), encoding="utf-8") as fh:
                 statements = split_sql_script(fh.read())
             done = skipped = 0

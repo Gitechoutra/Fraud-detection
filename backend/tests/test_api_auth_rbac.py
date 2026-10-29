@@ -160,13 +160,13 @@ def test_alerts_and_cases_workflow(client):
 def test_rules_and_bands(client):
     t = auth(staff_token(client, "risk"))
     data = client.get("/api/rules", headers=t).get_json()["data"]
-    assert len(data["rules"]) == 9 and data["bands"] == {"review_threshold": 40, "block_threshold": 70}
+    assert len(data["rules"]) == 9 and data["bands"] == {"review_threshold": 40, "block_threshold": 70, "model_weight": 0}
     assert client.put("/api/rules/R1", json={"is_active": False}, headers=t).get_json()["data"]["is_active"] is False
     assert client.put("/api/rules/ZZ", json={"weight": 1}, headers=t).status_code == 404
     assert client.put("/api/rules/bands", json={"review_threshold": 70, "block_threshold": 40},
                       headers=t).status_code == 422
     res = client.put("/api/rules/bands", json={"review_threshold": 35, "block_threshold": 75}, headers=t)
-    assert res.get_json()["data"] == {"review_threshold": 35, "block_threshold": 75}
+    assert res.get_json()["data"] == {"review_threshold": 35, "block_threshold": 75, "model_weight": 0}
     assert len(client.get("/api/rules", headers=t).get_json()["data"]["history"]) == 2
 
 

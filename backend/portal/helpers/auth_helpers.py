@@ -6,7 +6,9 @@ separate token kind used by the demo bank app.
 
 Roles are ranked: ADMIN > RISK_MANAGER > ANALYST. `min_role("ANALYST")`
 means "any staff role"; `min_role("RISK_MANAGER")` means risk managers and
-admins. Bank-app tokens (kind="bank") never pass a staff check.
+admins. Bank-app tokens (kind="bank"), customer-app tokens (kind="customer")
+and fraudster-console tokens (kind="fraudster") never pass a staff check,
+and each of those decorators accepts only its own kind.
 """
 
 import hmac
@@ -100,6 +102,51 @@ def api_key_or_role(level):
         return wrapper
 
     return decorator
+
+
+def _session_of(kind, model_name, message):
+    """Checks a customer-app or fraudster-console token: right kind, account
+    still exists, not locked, and not issued before a forced logout."""
+    from portal import models
+
+    verify_jwt_in_request()
+    claims = get_jwt()
+    if claims.get("kind") != kind:
+        raise AppError(message, "UNAUTHORIZED", 401)
+    user = db.session.get(getattr(models, model_name), claims["uid"])
+    if user is None or getattr(user, "is_locked", False):
+        raise AppError("This login is no longer allowed.", "ACCOUNT_LOCKED", 401)
+    issued = claims.get("iat_ms", claims.get("iat", 0) * 1000)
+    if user.tokens_valid_after and issued < user.tokens_valid_after.timestamp() * 1000:
+        raise AppError("Your session was ended. Please log in again.", "SESSION_REVOKED", 401)
+    return claims, user
+
+
+def customer_required(fn):
+    """Customer banking app (/bank): token kind "customer". Exposes
+    g.customer = {customer_id, account_id, user_id, username}; endpoints use
+    only these ids, never ids sent by the client."""
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        claims, user = _session_of("customer", "CustomerUser", "Please log in to your banking app.")
+        g.customer = {"customer_id": user.customer_id, "account_id": claims["account_id"], "user_id": user.id,
+                      "username": user.username}
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def fraudster_required(fn):
+    """Fraudster simulation console (/attacker): token kind "fraudster"."""
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        _, user = _session_of("fraudster", "FraudsterUser", "Please log in to the simulation console.")
+        g.fraudster = user
+        return fn(*args, **kwargs)
+
+    return wrapper
 
 
 def bank_session_required(fn):

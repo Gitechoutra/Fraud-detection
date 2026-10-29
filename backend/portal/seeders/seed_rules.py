@@ -3,10 +3,12 @@ The nine fraud rules with their default thresholds and weights, plus the
 decision bands. Inserted only if missing, so tuning done in the Rules page
 survives a re-seed. `reset_rules()` restores these defaults (used by tests).
 
-Weights were tuned from the specification's starting values
-(R1 30, R2 25, R3 35, R4 20, R5 10, R6 50, R7 15, R8 20, R9 45): with those, a
+Weights were tuned from the specification's starting values (Table 4.4:
+R1 30, R2 25, R3 35, R4 20, R5 10, R6 50, R7 15, R8 20, R9 45): with those, a
 fraud that trips a single rule stayed below the 40-point hold line and
-evaluation recall was 34%. Thresholds were not changed. See docs/RULES.md.
+evaluation recall was 34%. Thresholds were not changed. Each rule keeps its
+specification value in `spec_weight`, and `flask reset-rules --spec-weights`
+puts those back for comparison. See docs/RULES.md.
 """
 
 
@@ -26,6 +28,7 @@ RULES = [
         "params": [5, 3, 90, None],
         "param_labels": ["Times bigger than usual", "Past payments needed", "Look-back days"],
         "weight": 40,
+        "spec_weight": 30,
     },
     {
         "rule_code": "R2",
@@ -36,6 +39,7 @@ RULES = [
         "params": [5, 10, None, None],
         "param_labels": ["Max payments allowed", "Within minutes"],
         "weight": 40,
+        "spec_weight": 25,
     },
     {
         "rule_code": "R3",
@@ -46,6 +50,7 @@ RULES = [
         "params": [30, None, None, None],
         "param_labels": ["Minutes between cities"],
         "weight": 45,
+        "spec_weight": 35,
     },
     {
         "rule_code": "R4",
@@ -56,6 +61,7 @@ RULES = [
         "params": [25000, None, None, None],
         "param_labels": ["Amount above (₹)"],
         "weight": 40,
+        "spec_weight": 20,
     },
     {
         "rule_code": "R5",
@@ -66,6 +72,7 @@ RULES = [
         "params": [0, 5, 10000, None],
         "param_labels": ["From hour", "To hour", "Amount above (₹)"],
         "weight": 40,
+        "spec_weight": 10,
     },
     {
         "rule_code": "R6",
@@ -76,6 +83,7 @@ RULES = [
         "params": [None, None, None, None],
         "param_labels": [],
         "weight": 70,
+        "spec_weight": 50,
     },
     {
         "rule_code": "R7",
@@ -86,6 +94,7 @@ RULES = [
         "params": [3, 45000, 49999, 24],
         "param_labels": ["Number of payments", "From amount (₹)", "To amount (₹)", "Within hours"],
         "weight": 40,
+        "spec_weight": 15,
     },
     {
         "rule_code": "R8",
@@ -96,47 +105,56 @@ RULES = [
         "params": [180, 20000, None, None],
         "param_labels": ["Days without activity", "Amount above (₹)"],
         "weight": 40,
+        "spec_weight": 20,
     },
     {
         "rule_code": "R9",
         "name": "OTP / phishing takeover pattern",
         "simple_name": "OTP / phishing-link fraud",
         "description": "Payee added less than param_1 hours ago, amount at least param_3, and either the OTP was "
-                       "verified on an untrusted device or the payment is within param_2 minutes of a login from a "
+                       "verified on an untrusted device or from a new IP address, or the payment is within "
+                       "param_2 minutes of a login from a "
                        "new device, SIM change, password reset or mobile-number change.",
         "simple_explanation": "Money sent to a brand-new payee right after a risky login is the classic OTP scam.",
         "params": [24, 15, 10000, None],
         "param_labels": ["Payee newer than (hours)", "Risky login within (minutes)", "Amount from (₹)"],
         "weight": 55,
+        "spec_weight": 45,
     },
 ]
 
 SETTINGS = [
     ("REVIEW_THRESHOLD", "40", "Risk score from which a payment is held for review"),
     ("BLOCK_THRESHOLD", "70", "Risk score from which a payment is blocked"),
+    ("MODEL_SCORE_WEIGHT", "0",
+     "Percent of an external model's 0-100 score added to a payment that already fired a rule (0 = off)"),
 ]
 
 
-def _apply(rule, spec):
+def _apply(rule, spec, spec_weights=False):
     rule.name = spec["name"]
     rule.simple_name = spec["simple_name"]
     rule.description = spec["description"]
     rule.simple_explanation = spec["simple_explanation"]
     rule.param_1, rule.param_2, rule.param_3, rule.param_4 = spec["params"]
     rule.param_labels = spec["param_labels"]
-    rule.weight = spec["weight"]
+    rule.weight = spec["spec_weight"] if spec_weights else spec["weight"]
+    rule.spec_weight = spec["spec_weight"]
     rule.is_active = True
 
 
 def run(log=print):
     added = 0
     for order, spec in enumerate(RULES, start=1):
-        if db.session.get(FraudRule, spec["rule_code"]) is None:
+        rule = db.session.get(FraudRule, spec["rule_code"])
+        if rule is None:
             rule = FraudRule(rule_code=spec["rule_code"], sort_order=order, updated_by="seed",
                              updated_at=datetime.now())
             _apply(rule, spec)
             db.session.add(rule)
             added += 1
+        elif rule.spec_weight is None:
+            rule.spec_weight = spec["spec_weight"]
     for key, value, description in SETTINGS:
         if db.session.get(SystemSetting, key) is None:
             db.session.add(SystemSetting(setting_key=key, setting_value=value, description=description,
@@ -145,14 +163,16 @@ def run(log=print):
     log(f"  fraud_rules: {added} added")
 
 
-def reset_rules():
-    """Restores every rule and band to the defaults above."""
+def reset_rules(spec_weights=False):
+    """Restores every rule and band to the defaults above (with the
+    specification's Table 4.4 weights instead of the tuned ones if
+    spec_weights=True)."""
     for order, spec in enumerate(RULES, start=1):
         rule = db.session.get(FraudRule, spec["rule_code"])
         if rule is None:
             rule = FraudRule(rule_code=spec["rule_code"], sort_order=order)
             db.session.add(rule)
-        _apply(rule, spec)
+        _apply(rule, spec, spec_weights)
         rule.updated_by = "seed"
     for key, value, description in SETTINGS:
         setting = db.session.get(SystemSetting, key)

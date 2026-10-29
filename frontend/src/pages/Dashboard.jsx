@@ -17,6 +17,7 @@ import Skeleton from '../components/ui/Skeleton';
 import Tabs from '../components/ui/Tabs';
 import usePolling from '../hooks/usePolling';
 import { inrShort, pct } from '../utils/format';
+import { CHART_POLL_MS, DASHBOARD_POLL_MS } from '../utils/polling';
 
 const RANGES = [
   { value: 'today', label: 'Today' },
@@ -94,18 +95,25 @@ export default function Dashboard() {
   const [charts, setCharts] = useState(null);
   const [error, setError] = useState('');
 
-  const load = useCallback(async () => {
+  const loadSummary = useCallback(async () => {
     try {
-      const [s, c] = await Promise.all([dashboardApi.summary(range), dashboardApi.charts(range)]);
-      setSummary(s);
-      setCharts(c);
+      setSummary(await dashboardApi.summary(range));
       setError('');
     } catch (err) {
       setError(errorMessage(err));
     }
   }, [range]);
+  const loadCharts = useCallback(async () => {
+    try {
+      setCharts(await dashboardApi.charts(range));
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }, [range]);
 
-  usePolling(load, 15000);
+  // KPIs (incl. open alerts) every 3 s so new alerts show within 3 seconds.
+  usePolling(loadSummary, DASHBOARD_POLL_MS);
+  usePolling(loadCharts, CHART_POLL_MS);
 
   const changeRange = (r) => {
     setRange(r);
@@ -116,7 +124,7 @@ export default function Dashboard() {
   return (
     <PageShell
       title="Dashboard"
-      subtitle="How many payments were checked, how many were stopped, and why — updated every 15 seconds."
+      subtitle="How many payments were checked, how many were stopped, and why. Figures update every 3 seconds, charts every 15."
       actions={<Tabs id="range" tabs={RANGES} value={range} onChange={changeRange} />}
     >
       {error && <p className="mb-4 rounded-xl border border-blocked/30 bg-blocked-soft px-4 py-3 text-sm text-blocked">{error}</p>}
@@ -128,7 +136,7 @@ export default function Dashboard() {
               { icon: Activity, label: range === 'today' ? 'Payments today' : 'Payments', value: summary.total, hint: `${pct(summary.flag_rate)} flagged` },
               { icon: CheckCircle2, label: 'Approved', value: summary.approved, tone: 'text-approved', hint: 'went through normally' },
               { icon: PauseCircle, label: 'Held for review', value: summary.review, tone: 'text-review', hint: `${summary.open_alerts} alerts open` },
-              { icon: ShieldX, label: 'Blocked', value: summary.blocked, tone: 'text-blocked', hint: 'money never left' },
+              { icon: ShieldX, label: 'Blocked', value: summary.blocked, tone: 'text-blocked', hint: `${summary.confirmed_fraud} confirmed fraud · ${pct(summary.fraud_rate, 2)}` },
               { icon: IndianRupee, label: 'Money protected', value: summary.money_protected, format: inrShort, tone: 'text-approved', hint: 'value of blocked payments' },
               {
                 icon: Timer,
@@ -150,10 +158,10 @@ export default function Dashboard() {
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <Card title="Flagged by payment type" subtitle="Percentage of each channel’s payments that were held or blocked.">
+        <Card title="Alert and fraud rate by payment type" subtitle="Share of each channel’s payments that were held or blocked (alerts), and that analysts confirmed as fraud.">
           {!charts ? <Skeleton className="h-52" /> : <FraudByChannel data={charts.by_channel} />}
         </Card>
-        <Card title="Top cities" subtitle="Bigger dot = more payments; red = held or blocked.">
+        <Card title="Top cities" subtitle="Bigger dot = more payments; red = held or blocked. The list shows alerts and confirmed fraud.">
           {!charts ? <Skeleton className="h-52" /> : <CityMap data={charts.cities} />}
         </Card>
       </div>

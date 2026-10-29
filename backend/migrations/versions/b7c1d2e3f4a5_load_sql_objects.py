@@ -9,7 +9,7 @@ Revises: ae58f92b1200
 
 from alembic import op
 
-from portal.helpers.db_helpers import load_sql_objects
+from portal.helpers.db_helpers import load_sql_objects_if_head
 
 revision = "b7c1d2e3f4a5"
 down_revision = "ae58f92b1200"
@@ -18,7 +18,8 @@ depends_on = None
 
 
 def upgrade():
-    load_sql_objects(op.get_bind(), log=print)
+    # The files describe the latest schema; the newest migration loads them.
+    load_sql_objects_if_head(op.get_bind(), revision)
 
 
 def downgrade():

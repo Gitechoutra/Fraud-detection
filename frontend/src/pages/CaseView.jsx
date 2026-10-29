@@ -1,10 +1,11 @@
 import { ArrowLeft, CheckCircle2, ExternalLink, MessageSquarePlus, ShieldAlert, ShieldCheck } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { errorMessage } from '../api/client';
 import { alertApi, caseApi } from '../api/endpoints';
 import PageShell from '../components/layout/PageShell';
+import CustomerResponseBadge from '../components/risk/CustomerResponseBadge';
 import DecisionBadge from '../components/risk/DecisionBadge';
 import RiskGauge from '../components/risk/RiskGauge';
 import Badge from '../components/ui/Badge';
@@ -13,8 +14,18 @@ import Card from '../components/ui/Card';
 import EmptyState from '../components/ui/EmptyState';
 import Modal from '../components/ui/Modal';
 import Skeleton from '../components/ui/Skeleton';
+import usePolling from '../hooks/usePolling';
 import { exactTime, inr, shortDate, timeAgo } from '../utils/format';
+import { ALERT_POLL_MS } from '../utils/polling';
 import { RULES } from '../utils/ruleInfo';
+
+const FUNDS_TEXT = {
+  DEBITED: 'debited from the account',
+  HELD: 'held — not paid until the customer confirms',
+  PAID_AFTER_REVIEW: 'paid after the customer confirmed',
+  RELEASED: 'hold released, nothing paid',
+  NOT_MOVED: 'no money moved',
+};
 
 export default function CaseView() {
   const { id } = useParams();
@@ -27,9 +38,8 @@ export default function CaseView() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => caseApi.get(id).then(setData).catch((err) => setError(errorMessage(err))), [id]);
-  useEffect(() => {
-    load();
-  }, [load]);
+  // Re-read so the customer's answer in the banking app shows up live.
+  usePolling(load, ALERT_POLL_MS);
 
   const addNote = async (e) => {
     e.preventDefault();
@@ -137,6 +147,8 @@ export default function CaseView() {
             {a.channel || 'Net banking'} · {a.city} · {shortDate(a.txn_time || a.created_at)}
           </p>
           <Badge tone={a.priority === 'HIGH' ? 'blocked' : 'review'}>{a.priority === 'HIGH' ? 'High priority' : 'Medium priority'}</Badge>
+          {a.txn_id && <CustomerResponseBadge response={a.customer_response} withHelp />}
+          {a.funds_status && <p className="text-xs text-muted">Money: {FUNDS_TEXT[a.funds_status]}</p>}
           {a.txn_id && (
             <Link to={`/app/transactions/${a.txn_id}`} className="inline-flex items-center gap-1 text-sm text-primary hover:underline">
               Full explanation <ExternalLink className="h-3.5 w-3.5" />

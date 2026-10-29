@@ -14,6 +14,7 @@ from portal.seeders import (
     seed_admin,
     seed_customers,
     seed_demo_story,
+    seed_demo_users,
     seed_merchants,
     seed_roles,
     seed_rules,
@@ -26,7 +27,8 @@ TABLES = [
     "roles", "users", "fraud_rules", "system_settings", "customers", "accounts", "merchants",
     "devices", "sessions", "beneficiaries", "transactions", "rule_hits", "watchlist", "alerts",
     "cases", "case_notes", "otp_requests", "device_approvals", "notifications", "audit_log",
-    "metric_runs", "daily_stats", "token_blocklist",
+    "metric_runs", "daily_stats", "token_blocklist", "customer_users", "fraudster_users", "stolen_credentials",
+    "customer_alerts", "attack_events",
 ]
 
 
@@ -61,6 +63,7 @@ def run_all(log=print, customers=seed_customers.CUSTOMER_COUNT, history_days=see
     seed_watchlist.run(log)
     seed_customers.run(log, count=customers)
     seed_demo_story.run(log)
+    seed_demo_users.run(log)
     seed_transactions.run(log, days=history_days, frauds_per_rule=frauds_per_rule)
     refresh_daily_stats()
     simulator.clear_cache()

@@ -76,7 +76,8 @@ X-API-Key: dev-ingest-key
   "device_id": "NEW-PHONE-1",
   "ip_address": "103.21.4.9",
   "beneficiary_id": 12,
-  "txn_time": "2026-10-28T14:05:00"
+  "txn_time": "2026-10-28T14:05:00",
+  "model_score": 72
 }
 ```
 
@@ -136,7 +137,7 @@ feeds `v_rule_precision`.
 |---|---|---|---|
 | GET | `/rules` | ANALYST+ | → `{ rules (with stats from v_rule_precision), bands, history }` |
 | PUT | `/rules/{code}` | RISK_MANAGER+ | any of `param_1..param_4`, `weight` (0–100), `is_active` |
-| PUT | `/rules/bands` | RISK_MANAGER+ | `{ "review_threshold": 40, "block_threshold": 70 }` |
+| PUT | `/rules/bands` | RISK_MANAGER+ | `{ "review_threshold": 40, "block_threshold": 70, "model_weight": 0 }` (`model_weight` optional) |
 
 Changes apply to the very next payment (the procedure reads `fraud_rules` every time).
 A database trigger records each change in `audit_log`.
@@ -194,7 +195,7 @@ Limits: 5 OTP requests per account per 10 minutes (429), 3 verification attempts
 | Method | Path | Role |
 |---|---|---|
 | GET | `/simulator/scenarios` | ANALYST+ |
-| POST | `/simulator/scenario/{NORMAL\|R1..R9}` | RISK_MANAGER+ → `{ scenario, story, expected_rule, expected_rule_fired, target, steps, summary }` |
+| POST | `/simulator/scenario/{NORMAL\|R1..R9\|R1+R4\|R3+R6\|R5+R8}` | RISK_MANAGER+ → `{ scenario, story, expected_rule, expected_rules, expected_rule_fired, target, steps, summary }` |
 | POST | `/simulator/stream/start` | RISK_MANAGER+ — `{ "rate": 2, "fraud_ratio": 0.03 }` |
 | POST | `/simulator/stream/stop` | RISK_MANAGER+ |
 | GET | `/simulator/stream/status` | ANALYST+ |
@@ -203,8 +204,8 @@ Limits: 5 OTP requests per account per 10 minutes (429), 3 verification attempts
 
 | Method | Path | Role |
 |---|---|---|
-| GET | `/dashboard/summary?range=today\|7d\|30d\|90d` | ANALYST+ → `{ total, approved, review, blocked, money_protected, money_held, avg_decision_ms, open_alerts, high_open, flag_rate }` |
-| GET | `/dashboard/charts?range=...` | ANALYST+ → `{ volume, decisions, by_channel, cities, rule_hits, rule_precision }` |
+| GET | `/dashboard/summary?range=today\|7d\|30d\|90d` | ANALYST+ → `{ total, approved, review, blocked, money_protected, money_held, avg_decision_ms, open_alerts, high_open, flag_rate, confirmed_fraud, fraud_rate }` |
+| GET | `/dashboard/charts?range=...` | ANALYST+ → `{ volume, decisions, by_channel, cities, rule_hits, rule_precision }`; each `by_channel` / `cities` row has `total, flagged, blocked, confirmed_fraud` (alert rate = flagged/total, fraud rate = confirmed_fraud/total) |
 
 ## Evaluation
 
@@ -214,6 +215,9 @@ Limits: 5 OTP requests per account per 10 minutes (429), 3 verification attempts
 | GET | `/evaluation/status` | RISK_MANAGER+ → `{ running, done, total, last_run_id, error }` |
 | GET | `/evaluation/latest` | RISK_MANAGER+ → latest run with `targets` (pass/fail per target) |
 | GET | `/evaluation/history` | RISK_MANAGER+ → last 30 runs |
+| GET | `/evaluation/index-benchmark` | RISK_MANAGER+ → newest with/without-index pair `{ indexed, no_index, p95_speedup, tps_gain }` (from `flask benchmark-indexes`) |
+
+Each run includes `explainability` and `alert_visible_ms`, with targets 100% and ≤ 3000 ms.
 
 ## Customers, audit, users
 
@@ -222,9 +226,42 @@ Limits: 5 OTP requests per account per 10 minutes (429), 3 verification attempts
 | GET | `/customers?search=` | ANALYST+ |
 | GET | `/customers/{id}` | ANALYST+ → `{ customer, accounts, devices, payees, sessions, recent_transactions }` |
 | GET | `/audit?entity=&actor=&action=&search=` | RISK_MANAGER+ |
+| GET | `/alerts/freshness?days=7` | ANALYST+ → measured `{ measured, p50_ms, p95_ms, max_ms, target_ms, pass }` (alert committed → first shown) |
+| POST | `/alerts/seen` | ANALYST+ — `{ "alert_ids": [..] }`, sent by the Alerts page for alerts it just displayed |
+| GET | `/audit/verify` | RISK_MANAGER+ → `{ intact, rows, head_hash, first_bad_id, problem }` (re-computes the hash chain) |
 | GET | `/users` | ADMIN |
 | POST | `/users` | ADMIN — `{ username, full_name, password (8+), role }` |
 | PATCH | `/users/{id}` | ADMIN — any of `full_name, password, role, is_active` (you can't disable yourself) |
+
+## Customer banking app
+
+Token kind `customer` (from `/customer/login`, 30 minutes). Every request also sends `X-Device-Id`
+(8–64 letters, digits, `-`, `_`) and optionally `X-Demo-City`. All data is the token's own account.
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/customer/login` | `{ username, password }` → `{ token, customer, account (balance, held_amount, available), card, device, unread_alerts }`; 5 wrong passwords lock the login (423); logs a LOGIN session event |
+| POST | `/customer/logout` | revokes the token |
+| GET | `/customer/me` | profile, balance and hold, this device (trusted?) and demo city |
+| GET | `/customer/payees` | own payees (account numbers masked) |
+| POST | `/customer/payments` | `{ beneficiary_id, amount, channel: UPI\|NETBANKING, idempotency_key }` → the fraud-engine decision incl. `funds_status`; same key again → same decision (`duplicate: true`); ≤ ₹2,00,000 each, ≤ ₹5,00,000 a day; 422 `INSUFFICIENT_FUNDS` |
+| GET | `/customer/transactions?page=` | own history with status, `funds_status`, rules |
+| GET | `/customer/alerts` | newest 50 alerts `{ id, severity INFO\|WARNING\|DANGER, title, body, action_status, external_ref, funds_status, rules, created_at }` + `unread` |
+| POST | `/customer/alerts/read` | marks all read |
+| POST | `/customer/alerts/{id}/confirm` | `{ password }` — "This was me": device trusted, held payment completed once (409 if already answered) |
+| POST | `/customer/alerts/{id}/report` | "Not me": hold released (nothing paid), fraudster session ended, device/IP/payee watchlisted, case marked |
+
+## Fraudster simulation console (DEMO_MODE only)
+
+Token kind `fraudster`. Returns 404 when `DEMO_MODE` is off (default in production).
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/attacker/login` | `{ username, password }` → `{ token, display_name, base_city, credentials, scenarios }` |
+| GET | `/attacker/me` | credentials held (victim, masked account, card last 4, how obtained — never passwords) |
+| POST | `/attacker/attack/{R1..R9\|COMBINED}` | runs the fixed pattern through `fraud_engine.ingest` → `{ victim, steps[{label, status, risk_score, rules, external_ref, funds_status}], rules_fired, expected_rules_fired, bank_decision }` |
+| GET | `/attacker/events` | this fraudster's attack payments with current status, money and the victim's answer |
+| POST | `/demo/reset` | staff (ANALYST+) or fraudster token: restores the five demo accounts |
 
 ## Health
 

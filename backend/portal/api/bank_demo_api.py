@@ -104,7 +104,7 @@ def send_money():
     """Starts a payment: OTP Shield decides whether an OTP may be sent at all."""
     data = load(SendMoneySchema, request.get_json(silent=True))
     account = db.session.get(Account, g.bank["account_id"])
-    if float(data["amount"]) > float(account.balance):
+    if float(data["amount"]) > float(account.balance - (account.held_amount or 0)):
         raise AppError("Not enough balance for this payment.", "INSUFFICIENT_FUNDS", 400)
     result = otp_shield.request_otp(
         g.bank["account_id"], data["beneficiary_id"], data["amount"],

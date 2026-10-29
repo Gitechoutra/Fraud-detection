@@ -117,6 +117,12 @@ function RuleCard({ rule, canEdit, onSaved }) {
           className="w-full accent-primary"
           aria-label={`Weight of rule ${rule.rule_code}`}
         />
+        {rule.spec_weight != null && (
+          <span className="text-[11px] text-muted">
+            Specification starting weight: <span className="num">{rule.spec_weight}</span>
+            {rule.spec_weight !== draft.weight && ' (tuned for recall, see docs/RULES.md)'}
+          </span>
+        )}
       </label>
 
       <div className="mt-auto flex items-center justify-between gap-2 pt-4 text-xs text-muted">
@@ -186,10 +192,11 @@ function BandsCard({ bands, canEdit, onSaved }) {
         <span className="text-center">{r}–{b - 1}: <strong>Hold for review</strong></span>
         <span className="text-right">{b}–100: <strong>Block</strong></span>
       </div>
-      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+      <div className="mt-4 grid gap-4 sm:grid-cols-3">
         {[
           ['review_threshold', 'Hold from score', 1, 99],
           ['block_threshold', 'Block from score', 2, 100],
+          ['model_weight', 'External model score added (%)', 0, 100],
         ].map(([key, label, min, max]) => (
           <label key={key}>
             <span className="label flex justify-between normal-case tracking-normal">
@@ -207,9 +214,19 @@ function BandsCard({ bands, canEdit, onSaved }) {
           </label>
         ))}
       </div>
+      <p className="mt-2 text-xs text-muted">
+        Hook for an external ML model: a payment sent with a <span className="mono">model_score</span> (0–100) gets this percentage of it added,
+        but only when at least one rule fired — the model can raise a score, never flag a payment on its own. 0 turns it off.
+      </p>
       {canEdit && (
         <div className="mt-3 flex justify-end">
-          <Button size="sm" icon={Save} loading={busy} disabled={r >= b || (r === bands.review_threshold && b === bands.block_threshold)} onClick={save}>
+          <Button
+            size="sm"
+            icon={Save}
+            loading={busy}
+            disabled={r >= b || (r === bands.review_threshold && b === bands.block_threshold && draft.model_weight === bands.model_weight)}
+            onClick={save}
+          >
             Save bands
           </Button>
         </div>

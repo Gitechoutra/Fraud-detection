@@ -104,7 +104,7 @@ flowchart TD
 
 | Layer | Where | Responsibility |
 |---|---|---|
-| SQL engine | `portal/sql/*.sql` | indexes, views, audit triggers, `sp_evaluate_transaction`, `sp_otp_risk_check`, `fn_inr` |
+| SQL engine | `portal/sql/*.sql` | indexes, views, audit triggers, `sp_evaluate_transaction`, `sp_otp_risk_check`, `fn_inr`, audit hash chain (`fn_audit_hash`) |
 | Loader | `helpers/db_helpers.py` | runs the SQL files, honouring `DELIMITER` (also called from the Alembic migration) |
 | Services | `portal/services/` | `fraud_engine`, `otp_shield`, `notifier`, `simulator`, `evaluator` |
 | API | `portal/api/` | thin blueprints: validate → call a service → `ok()` / `error()` |
@@ -113,6 +113,10 @@ flowchart TD
 | UI | `frontend/src/` | React 18 + Vite + Tailwind + Framer Motion + Recharts |
 
 ## Data model (main tables)
+
+The complete `CREATE TABLE` script is [`docs/schema.sql`](schema.sql), generated from the models by
+`flask export-ddl` (a test fails if it is out of date). A Postman collection covering every staff
+and ingestion endpoint, with test scripts, is [`docs/FraudShield.postman_collection.json`](FraudShield.postman_collection.json).
 
 ```mermaid
 erDiagram
@@ -143,6 +147,8 @@ erDiagram
   accounts never wait for each other.
 * Measured on a laptop: ~15 ms median, ~30 ms p95 per decision (`tests/test_performance.py`);
   see `docs/RULES.md` for the full evaluation results.
+* `flask benchmark-indexes` measures the same load with and without the composite indexes
+  (`services/index_benchmark.py`).
 
 ## Security
 
@@ -150,6 +156,10 @@ erDiagram
   (`token_blocklist`).
 * Role checks on every staff endpoint (`min_role`), enforced on the server even though the UI also
   hides what a role cannot do. Demo-bank tokens are a separate kind and never pass a staff check.
+* The audit log is tamper-evident (`portal/sql/06_audit_chain.sql`): each entry stores the
+  SHA-256 of its content plus the previous entry's hash, `audit_chain` holds the newest hash, and
+  triggers refuse UPDATE and DELETE. `GET /api/audit/verify` / `flask verify-audit` re-compute the
+  chain and name the first entry that was changed, inserted or removed.
 * All SQL is parameterised; the only identifiers formatted into SQL (procedure and database names)
   are validated against a strict pattern first.
 * Rate limits: login 10/min, OTP requests 5 per account per 10 min, 3 OTP attempts.

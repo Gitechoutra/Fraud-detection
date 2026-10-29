@@ -13,6 +13,11 @@ class Case(db.Model):
     )
     analyst_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     outcome = db.Column(db.Enum("CONFIRMED_FRAUD", "FALSE_POSITIVE", name="case_outcome"))
+    # The customer's answer in the banking app ("This was me" / "Not me").
+    customer_response = db.Column(
+        db.Enum("WAITING", "CONFIRMED_ME", "REPORTED_NOT_ME", name="case_customer_response"),
+        nullable=False, default="WAITING", server_default="WAITING",
+    )
     notes = db.Column(db.Text)
     created_at = db.Column(DT, nullable=False, default=datetime.now)
     closed_at = db.Column(DT)

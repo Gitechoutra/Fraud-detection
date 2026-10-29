@@ -1,7 +1,8 @@
 """
 portal/services/simulator.py
 ============================
-Synthetic traffic: normal payments plus one fraud story per rule R1-R9.
+Synthetic traffic: normal payments, one fraud story per rule R1-R9, and
+stories that combine rules (R1+R4, R3+R6, R5+R8; see COMBOS).
 
 Every story is a short sequence of payments (and, for R9, a login, a new
 payee and an OTP request) that SHOULD trigger its rule. Labels:
@@ -57,7 +58,13 @@ STORIES = {
     "R7": "Money is sent as several ₹45,000+ payments to stay under the ₹50,000 check.",
     "R8": "An account unused for over 6 months suddenly sends a large amount.",
     "R9": "A scammer logs in on a new phone, adds a new payee and tries to move money.",
+    "R1+R4": "A thief on a brand-new phone makes one purchase many times bigger than the owner ever spends.",
+    "R3+R6": "Minutes after the owner pays at home, the card is used in another city from a known fraud IP address.",
+    "R5+R8": "An account asleep for over 6 months suddenly sends a large amount at 2 o'clock at night.",
 }
+# Fraud that trips several rules at once: story code -> the rules it must fire.
+COMBOS = {"R1+R4": ["R1", "R4"], "R3+R6": ["R3", "R6"], "R5+R8": ["R5", "R8"]}
+FRAUD_SCENARIOS = RULE_CODES + list(COMBOS)
 
 _cache = {"profiles": None, "dormant": None, "merchants": None, "loaded_at": 0.0}
 _cache_lock = threading.Lock()
@@ -97,6 +104,7 @@ def _load_profiles():
                   FROM devices WHERE is_trusted = 1 GROUP BY account_id) d ON d.account_id = a.id
          WHERE a.status = 'ACTIVE'
            AND (c.netbanking_id IS NULL OR c.netbanking_id <> 'ravi.kumar')
+           AND NOT EXISTS (SELECT 1 FROM customer_users cu WHERE cu.customer_id = c.id)
         """
     )
     profiles, dormant = [], []
@@ -113,8 +121,8 @@ def _load_profiles():
                (SELECT d.device_id FROM devices d
                  WHERE d.account_id = a.id AND d.is_trusted = 1 ORDER BY d.id LIMIT 1) AS device
           FROM accounts a JOIN customers c ON c.id = a.customer_id
-         WHERE a.status = 'DORMANT'
-            OR COALESCE(a.last_txn_at, a.opened_on) < NOW() - INTERVAL 200 DAY
+         WHERE (a.status = 'DORMANT' OR COALESCE(a.last_txn_at, a.opened_on) < NOW() - INTERVAL 200 DAY)
+           AND NOT EXISTS (SELECT 1 FROM customer_users cu WHERE cu.customer_id = c.id)
         """
     )
     merchants = fetch_all("SELECT id, name, category, city, risk_level FROM merchants WHERE risk_level <> 'HIGH'")
@@ -169,7 +177,7 @@ class ScenarioContext:
             result = fraud_engine.ingest(payload, source=self.source)
         self.created["txn_ids"].append(result["txn_id"])
         self.created["accounts"].append(payload["account_id"])
-        self.results.append({"label": label, "scenario": scenario, "result": result})
+        self.results.append({"label": label, "scenario": scenario, "result": result, "payload": dict(payload)})
         return result
 
     def add_session(self, account_id, event, device_id, ip, city, at):
@@ -314,13 +322,7 @@ def scenario_r4(ctx):
 
 def scenario_r5(ctx):
     p = _pick(ctx, min_avg=2400)
-    base = ctx.base_time
-    if ctx.live and base.hour < 5:
-        at = base
-    else:
-        at = base.replace(hour=ctx.rng.randint(1, 3), minute=ctx.rng.randint(0, 59), second=ctx.rng.randint(0, 59))
-        if at > datetime.now():
-            at -= timedelta(days=1)
+    at = _night(ctx, ctx.base_time)
     amount = ctx.rng.uniform(10500, max(10600.0, min(24000.0, p["avg90"] * 4.7)))
     return ctx.submit(_payment(ctx, p, amount, at, channel="UPI", tag="R5"), 1, "R5")
 
@@ -407,11 +409,73 @@ def scenario_r9(ctx):
     return result
 
 
+def _night(ctx, base):
+    """Live before 5 am: now. Otherwise 1-3 am on the base day."""
+    if ctx.live and base.hour < 5:
+        return base
+    at = base.replace(hour=ctx.rng.randint(1, 3), minute=ctx.rng.randint(0, 59), second=ctx.rng.randint(0, 59))
+    return at - timedelta(days=1) if at > datetime.now() else at
+
+
+def scenario_r1_r4(ctx):
+    """Stolen phone + card: a new device AND an amount far above usual."""
+    p = _pick(ctx, min_avg=1500, max_avg=5500)
+    at = _daytime(ctx, ctx.base_time)
+    amount = max(26000.0, p["avg90"] * ctx.rng.uniform(6, 9))
+    device = f"{ctx.prefix}-NEWPHONE-{uuid.uuid4().hex[:8]}"
+    ctx.created["devices"].append(device)
+    m = _merchant(ctx.rng, p["home_city"], ["Electronics", "Jewellery"])
+    return ctx.submit(
+        _payment(ctx, p, amount, at, channel="UPI", device=device, ip=fraud_ip(ctx.rng), merchant=m, tag="R1R4"),
+        1, "R1+R4",
+    )
+
+
+def scenario_r3_r6(ctx):
+    """Cloned card used far away, from an IP address already reported."""
+    p = _pick(ctx)
+    end = _daytime(ctx, ctx.base_time)
+    ctx.submit(_payment(ctx, p, _normal_amount(ctx.rng, p), end - timedelta(minutes=ctx.rng.randint(6, 20)),
+                        channel="CARD", tag="R3R6H"), 0, "R3+R6")
+    bad_ips = fetch_all("SELECT entry_value FROM watchlist WHERE entry_type = 'IP'")
+    ip = ctx.rng.choice(bad_ips)["entry_value"] if bad_ips else fraud_ip(ctx.rng)
+    far = ctx.rng.choice([c for c in CITIES if c != p["home_city"]])
+    stolen = f"{ctx.prefix}-CARDSKIM-{uuid.uuid4().hex[:8]}"
+    amount = min(20000.0, max(500.0, _normal_amount(ctx.rng, p)))
+    return ctx.submit(
+        _payment(ctx, p, amount, end, channel="CARD", city=far, device=stolen, ip=ip, tag="R3R6"), 1, "R3+R6"
+    )
+
+
+def scenario_r5_r8(ctx):
+    """A dormant account drained in the middle of the night."""
+    dormant = get_cache()["dormant"]
+    if not dormant:
+        raise RuntimeError("No dormant accounts found. Run `flask seed` first.")
+    d = ctx.rng.choice(dormant)
+    profile = {
+        "account_id": d["account_id"],
+        "home_city": d["home_city"],
+        "devices": [d["device"] or f"{ctx.prefix}-OLDPHONE-{d['account_id']}"],
+        "channels": ["NETBANKING"],
+    }
+    at = _night(ctx, ctx.base_time)
+    return ctx.submit(
+        _payment(ctx, profile, ctx.rng.uniform(25000, 60000), at, channel="NETBANKING", tag="R5R8"), 1, "R5+R8"
+    )
+
+
 SCENARIOS = {
     "NORMAL": normal_payment,
     "R1": scenario_r1, "R2": scenario_r2, "R3": scenario_r3, "R4": scenario_r4, "R5": scenario_r5,
     "R6": scenario_r6, "R7": scenario_r7, "R8": scenario_r8, "R9": scenario_r9,
+    "R1+R4": scenario_r1_r4, "R3+R6": scenario_r3_r6, "R5+R8": scenario_r5_r8,
 }
+
+
+def expected_rules(code):
+    """The rules a story is built to fire ([] for NORMAL)."""
+    return COMBOS.get(code, [] if code == "NORMAL" else [code])
 
 
 def run_scenario(code, ctx=None):
@@ -421,13 +485,14 @@ def run_scenario(code, ctx=None):
         raise KeyError(code)
     ctx = ctx or ScenarioContext()
     target = SCENARIOS[code](ctx)
-    expected = None if code == "NORMAL" else code
+    expected = expected_rules(code)
     fired = [h["rule_code"] for h in target["rules"]]
     return {
         "scenario": code,
         "story": STORIES[code],
-        "expected_rule": expected,
-        "expected_rule_fired": (expected in fired) if expected else (target["status"] == "APPROVED"),
+        "expected_rule": "+".join(expected) or None,
+        "expected_rules": expected,
+        "expected_rule_fired": all(r in fired for r in expected) if expected else (target["status"] == "APPROVED"),
         "target": target,
         "steps": [
             {
@@ -511,7 +576,7 @@ class StreamManager:
                 try:
                     ctx = ScenarioContext(source="SIMULATOR", live=True, rng=rng, prefix="LIVE")
                     if rng.random() < self.fraud_ratio:
-                        codes = [c for c in RULE_CODES if c != "R5" or datetime.now().hour < 5]
+                        codes = [c for c in FRAUD_SCENARIOS if "R5" not in c or datetime.now().hour < 5]
                         result = SCENARIOS[rng.choice(codes)](ctx)
                         self.stats["fraud"] += 1
                     else:

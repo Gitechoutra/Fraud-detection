@@ -12,6 +12,8 @@
 --   PASSWORD_RESET / SIM_CHANGE / MOBILE_CHANGE in the last 48 hours    +10
 --   Amount > 3 x the account's 90-day average                           +10
 --   Device, IP or payee account on the watchlist                        +40
+--   Step-up active (rule R9 fired on this account in the last 24 hours)
+--   and the device is not trusted                                       +40
 --
 -- Decision:  0-19 OTP_SENT  |  20-39 OTP_SENT_WITH_WARNING
 --            40+  OTP_BLOCKED_APPROVAL_REQUIRED (no OTP is generated at all)
@@ -45,6 +47,8 @@ BEGIN
     DECLARE v_avg         DECIMAL(14,2);
     DECLARE v_mins        INT;
     DECLARE v_obs         VARCHAR(160);
+    DECLARE v_step_up     DATETIME(3);
+    DECLARE v_trusted     TINYINT DEFAULT 0;
 
     DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
 
@@ -56,18 +60,20 @@ BEGIN
       INTO v_payee_hours, v_login_mins
       FROM fraud_rules WHERE rule_code = 'R9';
 
-    SELECT c.home_city INTO v_home
+    SELECT c.home_city, a.step_up_until INTO v_home, v_step_up
       FROM accounts a JOIN customers c ON c.id = a.customer_id
      WHERE a.id = p_account_id;
+
+    SET v_trusted = p_device_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM devices
+         WHERE account_id = p_account_id AND device_id = p_device_id AND is_trusted = 1);
 
     SELECT added_at, payee_account_no, payee_name INTO v_payee_added, v_payee_acct, v_payee_name
       FROM beneficiaries
      WHERE id = p_beneficiary_id AND account_id = p_account_id;
 
     -- 1. Untrusted device (+15)
-    IF p_device_id IS NULL OR NOT EXISTS (
-           SELECT 1 FROM devices
-            WHERE account_id = p_account_id AND device_id = p_device_id AND is_trusted = 1) THEN
+    IF NOT v_trusted THEN
         SET v_points = v_points + 15;
         SET v_signals = JSON_ARRAY_APPEND(v_signals, '$', JSON_OBJECT(
             'code', 'UNTRUSTED_DEVICE', 'points', 15,
@@ -168,6 +174,16 @@ BEGIN
         SET v_signals = JSON_ARRAY_APPEND(v_signals, '$', JSON_OBJECT(
             'code', 'WATCHLIST', 'points', 40,
             'text', CONCAT('The ', v_obs, ' is on the fraud watchlist')));
+    END IF;
+
+    -- 8. Step-up verification after an OTP-scam payment (+40)
+    IF v_step_up IS NOT NULL AND v_step_up > p_at AND NOT v_trusted THEN
+        SET v_points = v_points + 40;
+        SET v_signals = JSON_ARRAY_APPEND(v_signals, '$', JSON_OBJECT(
+            'code', 'STEP_UP_REQUIRED', 'points', 40,
+            'text', CONCAT('An OTP-scam payment was stopped on this account; until ',
+                           DATE_FORMAT(v_step_up, '%d %b %H:%i'),
+                           ' new devices must be approved on the registered phone')));
     END IF;
 
     SELECT v_points  AS risk_points,

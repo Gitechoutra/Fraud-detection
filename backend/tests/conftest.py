@@ -28,8 +28,9 @@ from portal.seeders import seed_admin, seed_merchants, seed_roles, seed_rules, s
 from portal.services import fraud_engine  # noqa: E402
 
 DYNAMIC_TABLES = [
+    "attack_events", "customer_alerts", "stolen_credentials", "customer_users", "fraudster_users",
     "case_notes", "cases", "alerts", "rule_hits", "device_approvals", "notifications", "transactions",
-    "otp_requests", "sessions", "beneficiaries", "devices", "accounts", "customers", "audit_log",
+    "otp_requests", "sessions", "beneficiaries", "devices", "accounts", "customers",
     "token_blocklist", "metric_runs", "daily_stats",
 ]
 _refs = itertools.count(1)
@@ -88,7 +89,15 @@ def _reset():
     db.session.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
     db.session.commit()
     seed_rules.reset_rules()
-    db.session.execute(text("DELETE FROM audit_log"))
+    db.session.commit()
+    clear_audit_log()
+
+
+def clear_audit_log():
+    """audit_log refuses DELETE (06_audit_chain.sql); TRUNCATE does not fire
+    triggers, so tests can still start from an empty, intact chain."""
+    db.session.execute(text("TRUNCATE TABLE audit_log"))
+    db.session.execute(text("DELETE FROM audit_chain"))
     db.session.commit()
 
 

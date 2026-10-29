@@ -4,6 +4,7 @@ cleans up after itself; the live stream starts and stops."""
 import time
 
 import pytest
+from sqlalchemy import text
 
 from portal.extensions import db
 from portal.helpers.db_helpers import scalar
@@ -21,41 +22,54 @@ def population():
     simulator.clear_cache()
 
 
-@pytest.mark.parametrize("code", ["NORMAL"] + simulator.RULE_CODES)
+@pytest.mark.parametrize("code", ["NORMAL"] + simulator.FRAUD_SCENARIOS)
 def test_each_scenario_triggers_its_rule(population, code):
     result = simulator.run_scenario(code)
     assert result["expected_rule_fired"], result["summary"]
     if code == "NORMAL":
         assert result["target"]["status"] == "APPROVED"
     else:
-        assert code in {h["rule_code"] for h in result["target"]["rules"]}
+        assert set(simulator.expected_rules(code)) <= {h["rule_code"] for h in result["target"]["rules"]}
 
 
 def test_scenarios_over_the_api(client, population):
     t = auth(staff_token(client, "risk"))
-    assert len(client.get("/api/simulator/scenarios", headers=t).get_json()["data"]) == 10
+    assert len(client.get("/api/simulator/scenarios", headers=t).get_json()["data"]) == 13
     res = client.post("/api/simulator/scenario/R3", headers=t).get_json()["data"]
     assert res["expected_rule"] == "R3" and res["expected_rule_fired"]
     assert len(res["steps"]) == 2
+    combo = client.post("/api/simulator/scenario/R1+R4", headers=t).get_json()["data"]
+    assert combo["expected_rules"] == ["R1", "R4"] and combo["expected_rule_fired"]
     assert client.post("/api/simulator/scenario/R42", headers=t).status_code == 404
 
 
 def test_evaluation_metrics_and_cleanup(population):
     before = scalar("SELECT COUNT(*) FROM transactions")
+    # Dormant accounts whose stored last activity is not exactly their last
+    # payment's time (as in seeded data) must come back unchanged too.
+    db.session.execute(text("UPDATE accounts SET last_txn_at = last_txn_at - INTERVAL 3 HOUR WHERE status = 'DORMANT'"))
+    db.session.commit()
+    accounts_before = evaluator.snapshot_accounts()
     m = evaluator.run_evaluation(size=200, fraud_ratio=0.1, days=7, workers=4, seed=11)
     assert m["total"] >= 200
-    assert m["tp"] + m["fn"] >= 18  # 10% fraud, at least 2 per rule
+    assert m["tp"] + m["fn"] >= 18  # 10% fraud, at least 1 per story
     assert 0 <= m["fpr"] <= 1 and 0 <= m["recall"] <= 1
-    assert len(m["per_rule"]) == 9 and len(m["per_scenario"]) == 9
-    assert all(s["rule_fired"] == s["count"] for s in m["per_scenario"])  # every story fired its rule
+    assert len(m["per_rule"]) == 9 and len(m["per_scenario"]) == 12
+    # every story, including the rule combinations, fired all of its rules
+    assert all(s["rule_fired"] == s["count"] for s in m["per_scenario"])
+    assert {s["scenario"] for s in m["per_scenario"]} >= {"R1+R4", "R3+R6", "R5+R8"}
     assert m["p95_ms"] > 0 and m["tps"] > 0
-    assert set(m["targets"]) == {"recall", "fpr", "p95_ms", "tps"}
+    assert set(m["targets"]) == {"recall", "fpr", "p95_ms", "tps", "explainability", "alert_visible_ms"}
+    assert m["explainability"] == 1.0 and m["explained"] == m["flagged"] > 0
+    assert m["targets"]["alert_visible_ms"]["pass"]  # new alerts on screen within 3 s
     run = db.session.get(MetricRun, m["run_id"])
-    assert run.total == m["total"]
+    assert run.total == m["total"] and float(run.explainability) == 1.0 and run.alert_visible_ms
     # Everything the evaluation created is gone again.
     assert scalar("SELECT COUNT(*) FROM transactions") == before
     assert scalar("SELECT COUNT(*) FROM transactions WHERE source = 'EVALUATION'") == 0
     assert scalar("SELECT COUNT(*) FROM otp_requests") == 0
+    db.session.rollback()
+    assert evaluator.snapshot_accounts() == accounts_before  # every account exactly as it was
 
 
 def test_evaluation_api_history(client, population):

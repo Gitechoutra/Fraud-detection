@@ -13,7 +13,11 @@
 --   2. For each active rule R1..R9: read its thresholds and weight from
 --      fraud_rules (never hard-coded), test it, and if it fires write one
 --      rule_hits row with the observed value and a plain-English sentence.
---   3. Score = LEAST(100, SUM(weight of fired rules)).
+--   3. Score = LEAST(100, SUM(weight of fired rules)), plus -- only when at
+--      least one rule fired -- MODEL_SCORE_WEIGHT % of an external model's
+--      0-100 score (the ML hook; 0 = off, so the rules alone decide). The
+--      model can raise a rule-backed score but never flag a payment on its
+--      own, so every decision stays explained by its rule hits.
 --   4. Decide: >= BLOCK_THRESHOLD -> BLOCKED, >= REVIEW_THRESHOLD -> REVIEW,
 --      else APPROVED.
 --   5. REVIEW/BLOCKED -> alert (HIGH if blocked) + investigation case.
@@ -58,6 +62,7 @@ proc: BEGIN
     DECLARE v_payee_acct    VARCHAR(20);
     DECLARE v_payee_name    VARCHAR(120);
     DECLARE v_payee_added   DATETIME(3);
+    DECLARE v_model         SMALLINT;
 
     -- The rule currently being evaluated (loaded from fraud_rules)
     DECLARE r_active TINYINT DEFAULT 0;
@@ -70,6 +75,8 @@ proc: BEGIN
     -- Decision bands (system_settings); defaults if the rows are missing
     DECLARE v_review INT DEFAULT 40;
     DECLARE v_block  INT DEFAULT 70;
+    DECLARE v_model_w INT DEFAULT 0;
+    DECLARE v_model_pts INT DEFAULT NULL;
 
     -- Working variables
     DECLARE v_score     INT DEFAULT 0;
@@ -103,11 +110,11 @@ proc: BEGIN
     SELECT t.account_id, a.account_no, t.amount, t.city, t.device_id, t.ip_address,
            t.txn_time, t.merchant_id, m.name, t.beneficiary_id, t.otp_request_id,
            t.status, a.last_txn_at, a.opened_on,
-           b.payee_account_no, b.payee_name, b.added_at
+           b.payee_account_no, b.payee_name, b.added_at, t.model_score
       INTO v_account_id, v_account_no, v_amount, v_city, v_device, v_ip,
            v_time, v_merchant, v_merchant_name, v_benef, v_otp,
            v_status, v_last_txn, v_opened,
-           v_payee_acct, v_payee_name, v_payee_added
+           v_payee_acct, v_payee_name, v_payee_added, v_model
       FROM transactions t
       JOIN accounts a           ON a.id = t.account_id
       LEFT JOIN merchants m     ON m.id = t.merchant_id
@@ -122,6 +129,7 @@ proc: BEGIN
     -- Already decided (e.g. a retry): return the existing decision unchanged.
     IF v_status <> 'PENDING' THEN
         SELECT t.risk_score AS risk_score, t.status AS status, al.id AS alert_id,
+               t.model_points AS model_points,
                (SELECT COUNT(*) FROM rule_hits rh WHERE rh.txn_id = t.id) AS hits,
                0 AS rules_ms, 0 AS score_ms, 0 AS decide_ms, 0 AS alert_ms,
                (SELECT JSON_ARRAYAGG(JSON_OBJECT('rule_code', rh.rule_code, 'weight_applied', rh.weight_applied,
@@ -137,6 +145,8 @@ proc: BEGIN
       FROM system_settings WHERE setting_key = 'REVIEW_THRESHOLD';
     SELECT CAST(setting_value AS SIGNED) INTO v_block
       FROM system_settings WHERE setting_key = 'BLOCK_THRESHOLD';
+    SELECT CAST(setting_value AS SIGNED) INTO v_model_w
+      FROM system_settings WHERE setting_key = 'MODEL_SCORE_WEIGHT';
 
     -- ------------------------------------------------------------------
     -- R1  Unusually large amount
@@ -349,7 +359,8 @@ proc: BEGIN
     -- R9  OTP / phishing-link fraud (OTP Shield safety net, "R9-B")
     --     payee added less than param_1 hours ago, amount >= param_3, AND
     --       (a) the OTP for this payment was typed on a device that is not
-    --           one of the customer's trusted devices, OR
+    --           one of the customer's trusted devices, or from an IP address
+    --           this account has never made an approved payment from, OR
     --       (b) within param_2 minutes before the payment there was a login
     --           from an untrusted device, a SIM change, a password reset or
     --           a mobile-number change.
@@ -374,6 +385,21 @@ proc: BEGIN
                                   AND d.is_trusted = 1);
             IF v_obs IS NOT NULL THEN
                 SET v_txt = 'the OTP was typed on a device the customer has never trusted';
+            ELSE
+                -- ... or from an internet address this account has never paid from
+                SELECT o.verified_ip INTO v_obs
+                  FROM otp_requests o
+                 WHERE o.id = v_otp
+                   AND o.verified_ip IS NOT NULL
+                   AND NOT EXISTS (SELECT 1 FROM transactions t
+                                    WHERE t.account_id = v_account_id
+                                      AND t.ip_address = o.verified_ip
+                                      AND t.status = 'APPROVED'
+                                      AND t.id <> p_txn_id);
+                IF v_obs IS NOT NULL THEN
+                    SET v_txt = CONCAT('the OTP was typed from an internet address (', v_obs,
+                                       ') this customer has never used');
+                END IF;
             END IF;
         END IF;
 
@@ -419,6 +445,10 @@ proc: BEGIN
     -- ------------------------------------------------------------------
     SELECT COALESCE(SUM(weight_applied), 0), COUNT(*) INTO v_score, v_hits
       FROM rule_hits WHERE txn_id = p_txn_id;
+    IF v_hits > 0 AND v_model IS NOT NULL AND v_model_w > 0 THEN
+        SET v_model_pts = ROUND(LEAST(100, GREATEST(0, v_model)) * v_model_w / 100);
+        SET v_score = v_score + v_model_pts;
+    END IF;
     SET v_score = LEAST(100, v_score);
     SET t_score = SYSDATE(6);
 
@@ -430,7 +460,8 @@ proc: BEGIN
                        WHEN v_score >= v_review THEN 'REVIEW'
                        ELSE 'APPROVED'
                    END;
-    UPDATE transactions SET risk_score = v_score, status = v_status WHERE id = p_txn_id;
+    UPDATE transactions SET risk_score = v_score, status = v_status, model_points = v_model_pts
+     WHERE id = p_txn_id;
     SET t_decide = SYSDATE(6);
 
     -- ------------------------------------------------------------------
@@ -475,6 +506,7 @@ proc: BEGIN
     SELECT v_score    AS risk_score,
            v_status   AS status,
            v_alert_id AS alert_id,
+           v_model_pts AS model_points,
            v_hits     AS hits,
            ROUND(TIMESTAMPDIFF(MICROSECOND, t_start,  t_rules)  / 1000, 3) AS rules_ms,
            ROUND(TIMESTAMPDIFF(MICROSECOND, t_rules,  t_score)  / 1000, 3) AS score_ms,

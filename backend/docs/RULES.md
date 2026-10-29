@@ -5,7 +5,8 @@ All nine rules run **inside MySQL**, in the stored procedure `sp_evaluate_transa
 `fraud_rules` table on every payment, so a change made in the Rules page applies to the very next
 payment. Nothing is hard-coded in Python.
 
-**Score** = `LEAST(100, SUM(weight of every rule that fired))`.
+**Score** = `LEAST(100, SUM(weight of every rule that fired))`, plus an optional external model
+score (see *Hook for an ML model* below; off by default).
 **Decision** (bands in `system_settings`, editable): 0–39 **Approved** · 40–69 **Held for review** ·
 70–100 **Blocked**. Held and blocked payments get an alert and an investigation case.
 
@@ -27,6 +28,9 @@ which is exactly what the app shows under “Why was this decision made?”.
 | R9 | OTP / phishing-link fraud | payee added < **24** h ago, amount ≥ **₹10,000**, and the OTP was typed on an untrusted device **or** the payment is within **15** min of a login from a new device / SIM change / password reset / mobile-number change | **55** | 45 |
 
 Only the weights changed during tuning; every threshold is still the specification's value.
+Each rule keeps its specification starting weight in `fraud_rules.spec_weight` (shown under the
+weight slider on the Rules page), and `flask reset-rules --spec-weights` switches back to the
+Table 4.4 weights for comparison; `flask reset-rules` restores the tuned ones.
 
 ---
 
@@ -141,6 +145,11 @@ IF v_benef IS NOT NULL AND v_amount >= r_p3                                     
    WHERE o.id = v_otp AND o.verified_device_id IS NOT NULL
      AND NOT EXISTS (SELECT 1 FROM devices d WHERE d.account_id = v_account_id
                        AND d.device_id = o.verified_device_id AND d.is_trusted = 1);
+  -- ... or typed from an IP this account never made an approved payment from
+  SELECT o.verified_ip INTO v_obs FROM otp_requests o
+   WHERE o.id = v_otp AND o.verified_ip IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM transactions t WHERE t.account_id = v_account_id
+                       AND t.ip_address = o.verified_ip AND t.status = 'APPROVED' AND t.id <> p_txn_id);
   -- (b) or a risky security event in the last r_p2 (15) minutes
   SELECT s.event_type, TIMESTAMPDIFF(MINUTE, s.created_at, v_time) INTO v_event, v_mins
     FROM sessions s
@@ -154,6 +163,21 @@ IF v_benef IS NOT NULL AND v_amount >= r_p3                                     
 ```
 Technique: `EXISTS` / `NOT EXISTS` across `beneficiaries`, `sessions`, `devices` and
 `otp_requests`, plus `TIMESTAMPDIFF`.
+
+**What happens once R9 fires** (`fraud_engine.r9_followup`, in the same database transaction as the
+decision; skipped for SEED and EVALUATION traffic):
+
+1. **Step-up verification** — `accounts.step_up_until` is set 24 hours ahead. Until then
+   `sp_otp_risk_check` adds a `STEP_UP_REQUIRED` signal (+40) to any OTP request from a device that
+   is not trusted, so no OTP is sent and the request must be approved on the registered phone. The
+   suspect device's sessions are logged out.
+2. **Cooling-off** — the new payee gets `cooling_until` = 24 hours; OTP requests to it are refused.
+3. **Separate-channel alert** — besides the SMS, an app notification tells the customer what happened.
+4. **Auto-watchlisting** — the payee account, and (unless it is one of the customer's trusted
+   devices) the device and IP address, go on the watchlist with `added_by = 'r9-engine'`.
+
+If an analyst closes the case as **FALSE_POSITIVE**, steps 1, 2 and 4 are undone
+(`fraud_engine.r9_release`).
 
 ## OTP Shield — checkpoint R9-A (before any OTP exists)
 
@@ -235,3 +259,39 @@ clears these in one click; they are the kind of case the “Mark as genuine” b
   amounts and hours), so the false-positive rate here is a lower bound for real traffic.
 * Each run deletes everything it created afterwards (`--keep` to keep it), and saves its metrics in
   `metric_runs`, shown on the Evaluation page.
+
+## Hook for an ML model
+
+A payment may carry `model_score` (0–100) from an external model. The setting
+`MODEL_SCORE_WEIGHT` (Rules page → Decision bands, default **0** = off) is the percentage of that score
+added to the rule score — but only when at least one rule fired. The model can therefore make a
+rule-backed decision stricter, but can never flag a payment on its own, so every held or blocked
+payment is still explained by its rule hits. The points it added are stored in
+`transactions.model_points`.
+
+## Rule-combination stories and the extra evaluation metrics
+
+Besides one story per rule, the simulator has stories that must fire several rules at once
+(`simulator.COMBOS`): **R1+R4** (big amount from a new phone), **R3+R6** (impossible travel from a
+watchlisted IP) and **R5+R8** (a dormant account drained at night). They are part of every
+evaluation and of the Fraud Lab; "all rules fired" is reported per story.
+
+Each evaluation also reports:
+
+* **Explainability** — the share of flagged payments that list at least one fired rule (target 100%).
+* **New alert on screen** — worst case from receiving a payment to its alert being visible:
+  p95 decision time + the alert-queue read + the 2-second refresh of the Alerts page and Live
+  Monitor (target ≤ 3 s). The dashboard figures refresh every 3 seconds.
+  It is also **measured** as Table 3.1 asks ("timestamp comparison between commit and UI display"):
+  each refresh of the Alerts page also returns the newest alerts, the page shows new ones under
+  *Just in* and reports them, and the database stamps `alerts.first_seen_at`. `GET /api/alerts/freshness`
+  (and the Evaluation page) gives p50/p95/max of `first_seen_at − created_at`.
+* **Latency** is measured from request receipt to the **committed** decision (`total_ms`, taken after
+  `COMMIT`; also written per payment to `logs/app.log`). The stored `transactions.decision_ms` is
+  taken just before the commit.
+
+`flask benchmark-indexes --size 2000` (load sent through the running ingestion API at
+`--api-url`, default `http://127.0.0.1:5000/api`; `--in-process` to skip HTTP) runs the same labelled
+payments with and without the composite
+`(account_id, txn_time)` / `(account_id, city, txn_time)` indexes and compares latency and throughput
+(Evaluation page → *With and without indexes*). The indexes are always restored afterwards.

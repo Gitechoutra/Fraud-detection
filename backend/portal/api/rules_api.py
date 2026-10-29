@@ -21,7 +21,8 @@ rules_bp = Blueprint("rules", __name__, url_prefix="/rules")
 
 def _bands():
     values = {s.setting_key: int(s.setting_value) for s in SystemSetting.query.all()}
-    return {"review_threshold": values.get("REVIEW_THRESHOLD", 40), "block_threshold": values.get("BLOCK_THRESHOLD", 70)}
+    return {"review_threshold": values.get("REVIEW_THRESHOLD", 40), "block_threshold": values.get("BLOCK_THRESHOLD", 70),
+            "model_weight": values.get("MODEL_SCORE_WEIGHT", 0)}
 
 
 @rules_bp.get("")
@@ -66,7 +67,10 @@ def update_bands():
     data = load(BandsSchema, request.get_json(silent=True))
     me = current_user()
     old = _bands()
-    for key, value in (("REVIEW_THRESHOLD", data["review_threshold"]), ("BLOCK_THRESHOLD", data["block_threshold"])):
+    if data["model_weight"] is None:
+        data["model_weight"] = old["model_weight"]
+    for key, value in (("REVIEW_THRESHOLD", data["review_threshold"]), ("BLOCK_THRESHOLD", data["block_threshold"]),
+                       ("MODEL_SCORE_WEIGHT", data["model_weight"])):
         setting = db.session.get(SystemSetting, key)
         if setting is None:
             setting = SystemSetting(setting_key=key, setting_value=str(value))

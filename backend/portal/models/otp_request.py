@@ -30,6 +30,7 @@ class OtpRequest(db.Model):
     expires_at = db.Column(DT)
     verified_at = db.Column(DT)
     verified_device_id = db.Column(db.String(64))
+    verified_ip = db.Column(db.String(45))  # where the OTP was typed (rule R9 checks it)
     txn_id = db.Column(db.BigInteger)
     created_at = db.Column(DT, nullable=False, default=datetime.now)
 
@@ -50,6 +51,7 @@ class OtpRequest(db.Model):
             "expires_at": iso(self.expires_at),
             "verified_at": iso(self.verified_at),
             "verified_device_id": self.verified_device_id,
+            "verified_ip": self.verified_ip,
             "txn_id": self.txn_id,
             "created_at": iso(self.created_at),
         }

@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CheckCircle2, ExternalLink, Loader2, Play, Square, XCircle } from 'lucide-react';
+import { CheckCircle2, ExternalLink, Layers, Loader2, Play, Square, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
@@ -19,6 +19,12 @@ import { NORMAL_SCENARIO, RULE_CODES, RULES } from '../utils/ruleInfo';
 const SCENARIOS = [
   { code: 'NORMAL', ...NORMAL_SCENARIO, story: NORMAL_SCENARIO.what },
   ...RULE_CODES.map((code) => ({ code, icon: RULES[code].icon, name: RULES[code].name, story: RULES[code].example })),
+  // Fraud that trips several rules at once (backend simulator.COMBOS).
+  ...[
+    ['R1+R4', 'A thief on a brand-new phone makes one purchase many times bigger than the owner ever spends.'],
+    ['R3+R6', 'Minutes after the owner pays at home, the card is used in another city from a known fraud IP address.'],
+    ['R5+R8', 'An account asleep for over 6 months suddenly sends a large amount at 2 o’clock at night.'],
+  ].map(([code, story]) => ({ code, icon: Layers, name: code.split('+').map((c) => RULES[c].name).join(' + '), story })),
 ];
 
 function ResultCard({ result }) {
@@ -37,8 +43,8 @@ function ResultCard({ result }) {
         {ok ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
         {result.expected_rule
           ? ok
-            ? `Rule ${result.expected_rule} caught it`
-            : `Rule ${result.expected_rule} did not fire`
+            ? `${result.expected_rules.length > 1 ? 'Rules' : 'Rule'} ${result.expected_rules.join(' + ')} caught it`
+            : `${result.expected_rules.length > 1 ? 'Not all of' : 'Rule'} ${result.expected_rules.join(' + ')} ${result.expected_rules.length > 1 ? 'fired' : 'did not fire'}`
           : ok
             ? 'Normal payment approved, as expected'
             : 'Normal payment was flagged'}

@@ -16,6 +16,7 @@ import Skeleton from '../components/ui/Skeleton';
 import Tabs from '../components/ui/Tabs';
 import Tooltip from '../components/ui/Tooltip';
 import usePolling from '../hooks/usePolling';
+import { ALERT_POLL_MS } from '../utils/polling';
 import { exactTime, inr, shortTime, timeAgo } from '../utils/format';
 
 const MAX_ROWS = 120;
@@ -68,7 +69,7 @@ export default function LiveMonitor() {
       setError(errorMessage(err));
     }
   }, []);
-  usePolling(poll, 2000, !paused);
+  usePolling(poll, ALERT_POLL_MS, !paused);
   usePolling(async () => setStream(await simulatorApi.status()), 5000);
 
   const visible = useMemo(

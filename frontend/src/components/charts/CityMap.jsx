@@ -89,7 +89,8 @@ export default function CityMap({ data }) {
               <span className="truncate">{d.city}</span>
             </span>
             <span className="num shrink-0 text-xs text-muted">
-              {d.total.toLocaleString('en-IN')} <span className="text-blocked">· {d.flagged}</span>
+              {d.total.toLocaleString('en-IN')} <span className="text-review" title="alerts (held or blocked)">· {d.flagged}</span>{' '}
+              <span className="text-blocked" title="confirmed fraud">· {d.confirmed_fraud || 0}</span>
             </span>
           </li>
         ))}
@@ -100,6 +101,7 @@ export default function CityMap({ data }) {
           <span className="flex items-center gap-1">
             <span className="h-2 w-2 rounded-full bg-blocked" /> held or blocked
           </span>
+          <span className="num">count · alerts · confirmed fraud</span>
         </li>
       </ol>
     </div>

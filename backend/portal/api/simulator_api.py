@@ -13,14 +13,15 @@ simulator_bp = Blueprint("simulator", __name__, url_prefix="/simulator")
 @simulator_bp.get("/scenarios")
 @min_role("ANALYST")
 def scenarios():
-    return ok([{"code": code, "story": story} for code, story in simulator.STORIES.items()])
+    return ok([{"code": code, "story": story, "rules": simulator.expected_rules(code)}
+               for code, story in simulator.STORIES.items()])
 
 
 @simulator_bp.post("/scenario/<code>")
 @min_role("RISK_MANAGER")
 def run_scenario(code):
     if code.upper() not in simulator.SCENARIOS:
-        raise AppError("Unknown scenario. Use NORMAL or R1..R9.", "NOT_FOUND", 404)
+        raise AppError("Unknown scenario. Use NORMAL, R1..R9, R1+R4, R3+R6 or R5+R8.", "NOT_FOUND", 404)
     try:
         return ok(simulator.run_scenario(code))
     except RuntimeError as exc:

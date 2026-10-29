@@ -132,7 +132,8 @@ def reset_story():
     db.session.execute(text("DELETE FROM devices WHERE account_id = :a AND device_id <> :d"),
                        {"a": account.id, "d": RAVI["device_id"]})
     db.session.execute(text("UPDATE beneficiaries SET cooling_until = NULL WHERE account_id = :a"), params)
-    db.session.execute(text("UPDATE accounts SET balance = 185000, status = 'ACTIVE' WHERE id = :a"), params)
+    db.session.execute(text("UPDATE accounts SET balance = 185000, held_amount = 0, status = 'ACTIVE' WHERE id = :a"),
+                       params)
     db.session.commit()
     set_actor(None)
     return True

@@ -24,3 +24,6 @@ class Alert(db.Model):
     assigned_to = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(DT, nullable=False, default=datetime.now)
     updated_at = db.Column(DT, nullable=False, default=datetime.now, onupdate=datetime.now)
+    # When the alert queue first showed it on an analyst's screen (reported by
+    # the Alerts page); first_seen_at - created_at is the measured freshness.
+    first_seen_at = db.Column(DT)

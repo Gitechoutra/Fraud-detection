@@ -1,10 +1,11 @@
-import { BellOff, Search, UserCheck } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { BellOff, BellRing, Search, UserCheck } from 'lucide-react';
+import { useCallback, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import { errorMessage } from '../api/client';
 import { alertApi } from '../api/endpoints';
 import PageShell from '../components/layout/PageShell';
+import CustomerResponseBadge from '../components/risk/CustomerResponseBadge';
 import DecisionBadge from '../components/risk/DecisionBadge';
 import RuleChip from '../components/risk/RuleChip';
 import Badge from '../components/ui/Badge';
@@ -14,6 +15,7 @@ import Table, { Pager } from '../components/ui/Table';
 import Tabs from '../components/ui/Tabs';
 import Tooltip from '../components/ui/Tooltip';
 import usePolling from '../hooks/usePolling';
+import { ALERT_POLL_MS } from '../utils/polling';
 import { exactTime, inr, timeAgo, titleCase } from '../utils/format';
 
 export default function Alerts() {
@@ -24,15 +26,31 @@ export default function Alerts() {
   const [page, setPage] = useState(1);
   const [res, setRes] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  // Alerts that appeared while this page was open (newest first).
+  const [justIn, setJustIn] = useState([]);
+  const known = useRef(null);
 
   const load = useCallback(async () => {
     try {
-      setRes(await alertApi.list({ status, page, per_page: 15, search: search || undefined, mine: mine ? 1 : undefined }));
+      const r = await alertApi.list({ status, page, per_page: 15, search: search || undefined, mine: mine ? 1 : undefined });
+      setRes(r);
+      const ids = r.newest.map((a) => a.alert_id);
+      if (known.current === null) {
+        known.current = new Set(ids); // what was already there when the page opened
+      } else {
+        const fresh = r.newest.filter((a) => !known.current.has(a.alert_id));
+        if (fresh.length) {
+          fresh.forEach((a) => known.current.add(a.alert_id));
+          setJustIn((prev) => [...fresh, ...prev].slice(0, 5));
+          // Measured freshness: the server stamps when each one was first shown.
+          alertApi.seen(fresh.map((a) => a.alert_id)).catch(() => {});
+        }
+      }
     } catch (err) {
       toast.error(errorMessage(err));
     }
   }, [status, page, search, mine]);
-  usePolling(load, 5000);
+  usePolling(load, ALERT_POLL_MS);
 
   const assign = async (e, row) => {
     e.stopPropagation();
@@ -82,6 +100,12 @@ export default function Alerts() {
       ),
     },
     {
+      key: 'customer',
+      label: 'Customer says',
+      hideOnMobile: true,
+      render: (r) => (r.txn_id ? <CustomerResponseBadge response={r.customer_response} /> : <span className="text-xs text-muted">—</span>),
+    },
+    {
       key: 'age',
       label: 'Waiting',
       render: (r) => (
@@ -112,6 +136,37 @@ export default function Alerts() {
       title="Alerts"
       subtitle="Payments that were held or blocked, oldest and most urgent first. Open one to investigate and decide."
     >
+      {justIn.length > 0 && (
+        <div className="card mb-4 p-4" aria-live="polite">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="flex items-center gap-2 text-sm font-medium">
+              <BellRing className="h-4 w-4 text-blocked" aria-hidden /> Just in
+            </p>
+            <button type="button" className="text-xs text-muted underline" onClick={() => setJustIn([])}>
+              Clear
+            </button>
+          </div>
+          <ul className="space-y-1.5">
+            {justIn.map((a) => (
+              <li key={a.alert_id}>
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 rounded-lg px-2 py-1 text-left text-sm hover:bg-surface2"
+                  onClick={() => a.case_id && navigate(`/app/cases/${a.case_id}`)}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Badge tone={a.priority === 'HIGH' ? 'blocked' : 'review'}>{a.priority === 'HIGH' ? 'High' : 'Medium'}</Badge>
+                    <span className="truncate">{a.summary}</span>
+                  </span>
+                  <span className="shrink-0 text-xs text-muted" title={exactTime(a.created_at)}>
+                    {timeAgo(a.created_at)}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <Card bodyClass="p-4">
         <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <Tabs

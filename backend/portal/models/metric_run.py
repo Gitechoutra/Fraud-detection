@@ -24,7 +24,12 @@ class MetricRun(db.Model):
     p95_ms = db.Column(db.Numeric(10, 2), nullable=False)
     tps = db.Column(db.Numeric(10, 2), nullable=False)
     fraud_ratio = db.Column(db.Numeric(5, 4))
-    mode = db.Column(db.String(16))  # API / IN_PROCESS
+    mode = db.Column(db.String(16))  # API / IN_PROCESS / BENCH_INDEXED / BENCH_NO_INDEX
+    # Share of flagged payments that list at least one fired rule.
+    explainability = db.Column(db.Numeric(6, 4))
+    # Worst case from payment received to alert on screen (p95 decision +
+    # alert-queue read + the Alerts page polling interval).
+    alert_visible_ms = db.Column(db.Numeric(10, 2))
     per_rule_json = db.Column(db.JSON)
     per_scenario_json = db.Column(db.JSON)
 
@@ -46,6 +51,8 @@ class MetricRun(db.Model):
             "tps": float(self.tps),
             "fraud_ratio": float(self.fraud_ratio) if self.fraud_ratio is not None else None,
             "mode": self.mode,
+            "explainability": float(self.explainability) if self.explainability is not None else None,
+            "alert_visible_ms": float(self.alert_visible_ms) if self.alert_visible_ms is not None else None,
             "per_rule": self.per_rule_json or [],
             "per_scenario": self.per_scenario_json or [],
         }

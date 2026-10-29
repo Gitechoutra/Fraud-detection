@@ -18,6 +18,8 @@ export const txnApi = {
 export const alertApi = {
   list: (params) => data(client.get('/alerts', q(params))),
   update: (id, body) => data(client.patch(`/alerts/${id}`, body)),
+  seen: (alert_ids) => data(client.post('/alerts/seen', { alert_ids })),
+  freshness: (days = 7) => data(client.get('/alerts/freshness', q({ days }))),
 };
 
 export const caseApi = {
@@ -44,7 +46,7 @@ export const dashboardApi = {
 };
 
 export const simulatorApi = {
-  run: (code) => data(client.post(`/simulator/scenario/${code}`)),
+  run: (code) => data(client.post(`/simulator/scenario/${encodeURIComponent(code)}`)),
   start: (rate, fraud_ratio) => data(client.post('/simulator/stream/start', { rate, fraud_ratio })),
   stop: () => data(client.post('/simulator/stream/stop')),
   status: () => data(client.get('/simulator/stream/status')),
@@ -55,9 +57,13 @@ export const evaluationApi = {
   status: () => data(client.get('/evaluation/status')),
   latest: () => data(client.get('/evaluation/latest')),
   history: () => data(client.get('/evaluation/history')),
+  indexBenchmark: () => data(client.get('/evaluation/index-benchmark')),
 };
 
-export const auditApi = { list: (params) => data(client.get('/audit', q(params))) };
+export const auditApi = {
+  list: (params) => data(client.get('/audit', q(params))),
+  verify: () => data(client.get('/audit/verify')),
+};
 
 export const userApi = {
   list: () => data(client.get('/users')),

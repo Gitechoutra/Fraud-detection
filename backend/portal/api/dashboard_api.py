@@ -12,6 +12,11 @@ dashboard_bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
 
 RANGES = {"today": 0, "7d": 6, "30d": 29, "90d": 89}
 
+_RATE_COLUMNS = """COUNT(*) AS total, SUM(t.status IN ('REVIEW', 'BLOCKED')) AS flagged,
+               SUM(t.status = 'BLOCKED') AS blocked,
+               COALESCE(SUM(c.outcome = 'CONFIRMED_FRAUD'), 0) AS confirmed_fraud"""
+_CASE_JOIN = "LEFT JOIN alerts a ON a.txn_id = t.id LEFT JOIN cases c ON c.alert_id = a.id"
+
 
 def _start():
     key = request.args.get("range", "today")
@@ -25,18 +30,19 @@ def _start():
 def summary():
     key, start = _start()
     row = fetch_one(
-        """
+        f"""
         SELECT COUNT(*) AS total,
-               COALESCE(SUM(status = 'APPROVED'), 0) AS approved,
-               COALESCE(SUM(status = 'REVIEW'), 0)   AS review,
-               COALESCE(SUM(status = 'BLOCKED'), 0)  AS blocked,
-               COALESCE(SUM(CASE WHEN status = 'BLOCKED' THEN amount END), 0) AS money_protected,
-               COALESCE(SUM(CASE WHEN status = 'REVIEW' THEN amount END), 0)  AS money_held,
-               COALESCE(SUM(amount), 0) AS total_amount,
-               ROUND(AVG(decision_ms), 2) AS avg_decision_ms,
-               MAX(decision_ms) AS max_decision_ms
-          FROM transactions
-         WHERE txn_time >= :start AND status <> 'PENDING'
+               COALESCE(SUM(t.status = 'APPROVED'), 0) AS approved,
+               COALESCE(SUM(t.status = 'REVIEW'), 0)   AS review,
+               COALESCE(SUM(t.status = 'BLOCKED'), 0)  AS blocked,
+               COALESCE(SUM(CASE WHEN t.status = 'BLOCKED' THEN t.amount END), 0) AS money_protected,
+               COALESCE(SUM(CASE WHEN t.status = 'REVIEW' THEN t.amount END), 0)  AS money_held,
+               COALESCE(SUM(t.amount), 0) AS total_amount,
+               COALESCE(SUM(c.outcome = 'CONFIRMED_FRAUD'), 0) AS confirmed_fraud,
+               ROUND(AVG(t.decision_ms), 2) AS avg_decision_ms,
+               MAX(t.decision_ms) AS max_decision_ms
+          FROM transactions t {_CASE_JOIN}
+         WHERE t.txn_time >= :start AND t.status <> 'PENDING'
         """,
         {"start": start},
     )
@@ -49,6 +55,7 @@ def summary():
     data.update(jsonable(alerts))
     data["range"] = key
     data["flag_rate"] = round((data["review"] + data["blocked"]) / data["total"], 4) if data["total"] else 0
+    data["fraud_rate"] = round(data["confirmed_fraud"] / data["total"], 4) if data["total"] else 0
     return ok(data)
 
 
@@ -81,20 +88,23 @@ def charts():
         "WHERE txn_time >= :start AND status <> 'PENDING' GROUP BY status",
         params,
     )
+    # Alert rate = held or blocked; fraud rate = confirmed as fraud by an
+    # analyst closing the case.
     by_channel = fetch_all(
-        """
-        SELECT channel, COUNT(*) AS total, SUM(status IN ('REVIEW', 'BLOCKED')) AS flagged,
-               SUM(status = 'BLOCKED') AS blocked
-          FROM transactions WHERE txn_time >= :start AND status <> 'PENDING'
-         GROUP BY channel ORDER BY channel
+        f"""
+        SELECT t.channel, {_RATE_COLUMNS}
+          FROM transactions t {_CASE_JOIN}
+         WHERE t.txn_time >= :start AND t.status <> 'PENDING'
+         GROUP BY t.channel ORDER BY t.channel
         """,
         params,
     )
     cities = fetch_all(
-        """
-        SELECT city, COUNT(*) AS total, SUM(status IN ('REVIEW', 'BLOCKED')) AS flagged
-          FROM transactions WHERE txn_time >= :start AND status <> 'PENDING' AND city IS NOT NULL
-         GROUP BY city ORDER BY total DESC LIMIT 12
+        f"""
+        SELECT t.city, {_RATE_COLUMNS}
+          FROM transactions t {_CASE_JOIN}
+         WHERE t.txn_time >= :start AND t.status <> 'PENDING' AND t.city IS NOT NULL
+         GROUP BY t.city ORDER BY total DESC LIMIT 12
         """,
         params,
     )

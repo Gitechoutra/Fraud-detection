@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowRight, BellRing, Link2, PhoneCall, ShieldCheck, ShieldX, Smartphone } from 'lucide-react';
+import { ArrowLeftRight, ArrowRight, BellRing, Briefcase, Link2, PhoneCall, ShieldCheck, ShieldX, Skull, Smartphone } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import ThemeToggle from '../components/layout/ThemeToggle';
@@ -54,6 +54,37 @@ function Story() {
   );
 }
 
+function EntryPoints({ staffTarget }) {
+  const entries = [
+    { to: staffTarget, icon: Briefcase, title: 'Bank staff', text: 'Analysts and risk managers: live monitor, alert queue, cases, rules and dashboard.', cls: 'bg-primary-soft text-primary' },
+    { to: '/bank', icon: Smartphone, title: 'Customer app', text: 'Log in as Ravi, Priya, Suresh, Lakshmi or Arjun: balance, payments, and real-time fraud alerts.', cls: 'bg-approved-soft text-approved' },
+    { to: '/attacker', icon: Skull, title: 'Fraudster demo', text: 'Simulation only: play each fraud pattern with stolen demo credentials and see what the bank decides.', cls: 'bg-blocked-soft text-blocked' },
+  ];
+  return (
+    <section className="pb-6" aria-label="Choose how to enter">
+      <div className="grid gap-4 md:grid-cols-3">
+        {entries.map((e) => {
+          const Icon = e.icon;
+          return (
+            <Link key={e.title} to={e.to} className="card group flex flex-col gap-3 p-5 transition hover:border-primary/50 hover:shadow-glow">
+              <span className={clsx('w-fit rounded-xl p-2.5', e.cls)}>
+                <Icon className="h-5 w-5" aria-hidden />
+              </span>
+              <span className="flex items-center justify-between font-semibold">
+                {e.title} <ArrowRight className="h-4 w-4 text-muted transition group-hover:translate-x-1" aria-hidden />
+              </span>
+              <span className="text-sm text-muted">{e.text}</span>
+            </Link>
+          );
+        })}
+      </div>
+      <Link to="/demo" className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-line bg-surface px-4 py-3 text-sm font-medium hover:border-primary/50">
+        <ArrowLeftRight className="h-4 w-4 text-primary" aria-hidden /> Open the split-screen demo: fraudster and victim side by side
+      </Link>
+    </section>
+  );
+}
+
 export default function Landing() {
   const { user } = useAuth();
   const target = user ? '/app' : '/login';
@@ -91,6 +122,8 @@ export default function Landing() {
             </Link>
           </motion.div>
         </section>
+
+        <EntryPoints staffTarget={target} />
 
         <section className="py-10">
           <h2 className="mb-2 text-2xl font-semibold">How Ravi’s OTP scam was stopped</h2>

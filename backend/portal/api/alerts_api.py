@@ -1,15 +1,19 @@
-"""Alert queue (from v_alert_queue): list, detail, assign, change status."""
+"""Alert queue (from v_alert_queue): list, detail, assign, change status,
+and the measured dashboard freshness (time from an alert being committed to
+it appearing on an analyst's screen)."""
 
 from datetime import datetime
 
 from flask import Blueprint, request
+from sqlalchemy import text
 
 from portal.extensions import db
 from portal.helpers.auth_helpers import current_user, min_role
 from portal.helpers.db_helpers import fetch_all, fetch_one, jsonable, scalar, set_actor
 from portal.helpers.responses import AppError, ok, page_args
-from portal.helpers.validators import AlertUpdateSchema, load
+from portal.helpers.validators import AlertSeenSchema, AlertUpdateSchema, load
 from portal.models import Alert, User
+from portal.services import evaluator
 
 alerts_bp = Blueprint("alerts", __name__, url_prefix="/alerts")
 
@@ -48,6 +52,10 @@ def list_alerts():
     )
     counts = {r["alert_status"]: r["n"] for r in fetch_all(
         "SELECT alert_status, COUNT(*) AS n FROM alerts GROUP BY alert_status")}
+    # The newest alerts, whatever the filter and page, so the screen can show
+    # each new one as soon as it exists.
+    newest = fetch_all("SELECT a.id AS alert_id, c.id AS case_id, a.summary, a.priority, a.risk_score, a.created_at "
+                       "FROM alerts a LEFT JOIN cases c ON c.alert_id = a.id ORDER BY a.id DESC LIMIT 10")
     return ok({
         "items": [_row(r) for r in rows],
         "total": total,
@@ -55,7 +63,33 @@ def list_alerts():
         "per_page": per_page,
         "pages": max(1, -(-total // per_page)),
         "counts": {k: counts.get(k, 0) for k in ("OPEN", "IN_PROGRESS", "CLOSED")},
+        "newest": [jsonable(r) for r in newest],
     })
+
+
+@alerts_bp.post("/seen")
+@min_role("ANALYST")
+def mark_seen():
+    """The Alerts page reports alerts it has just displayed for the first
+    time; the database clock stamps when (the same clock as created_at)."""
+    ids = load(AlertSeenSchema, request.get_json(silent=True))["alert_ids"]
+    if ids:
+        marks = ", ".join(f":a{i}" for i in range(len(ids)))
+        db.session.execute(
+            text(f"UPDATE alerts SET first_seen_at = NOW(3) WHERE first_seen_at IS NULL AND id IN ({marks})"),
+            {f"a{i}": v for i, v in enumerate(ids)},
+        )
+        db.session.commit()
+    return ok({"marked": len(ids)})
+
+
+@alerts_bp.get("/freshness")
+@min_role("ANALYST")
+def freshness():
+    """Measured time from an alert being committed to it first appearing on
+    screen, over the last `days` days (specification Table 3.1: within 3 s)."""
+    days = min(90, max(1, request.args.get("days", 7, type=int)))
+    return ok(evaluator.measured_alert_freshness(days))
 
 
 @alerts_bp.get("/<int:alert_id>")

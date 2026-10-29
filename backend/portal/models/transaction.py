@@ -4,6 +4,9 @@ from portal.extensions import db
 from portal.models.types import DT, MONEY
 
 TXN_STATUSES = ("PENDING", "APPROVED", "REVIEW", "BLOCKED")
+# What happened to the money (services/funds.py). NULL for payments that
+# move no money (seed history, evaluations).
+FUNDS_STATUSES = ("DEBITED", "HELD", "PAID_AFTER_REVIEW", "RELEASED", "NOT_MOVED")
 CHANNELS = ("CARD", "UPI", "NETBANKING", "ATM")
 
 
@@ -32,7 +35,12 @@ class Transaction(db.Model):
     risk_score = db.Column(db.SmallInteger, nullable=False, default=0)
     status = db.Column(db.Enum(*TXN_STATUSES, name="txn_status"), nullable=False, default="PENDING")
     decision_ms = db.Column(db.Numeric(10, 2))
+    funds_status = db.Column(db.Enum(*FUNDS_STATUSES, name="txn_funds_status"))
     stage_timings = db.Column(db.JSON)
+    # Hook for an external ML model: its 0-100 score, and the points it added
+    # (MODEL_SCORE_WEIGHT % of it, only on top of at least one fired rule).
+    model_score = db.Column(db.SmallInteger)
+    model_points = db.Column(db.SmallInteger)
     is_fraud_label = db.Column(db.Boolean)
     scenario = db.Column(db.String(16))
     # API / SIMULATOR / EVALUATION / SEED / BANK_DEMO / CSV

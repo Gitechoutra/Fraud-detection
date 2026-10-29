@@ -9,8 +9,10 @@ live in MySQL (portal/sql/04_sp_evaluate_transaction.sql). This module:
   1. resolves the account (by id or number) and checks the payee belongs to it,
   2. INSERTs the payment as PENDING and CALLs the procedure on the same
      connection, inside the same database transaction,
-  3. records the decision time, tells the customer if it was held/blocked,
-     and commits ONCE. Any error rolls everything back, so a payment never
+  3. records the decision time, moves or reserves the money (services/funds:
+     APPROVED debited, REVIEW held, BLOCKED nothing), tells the customer if
+     it was held/blocked (SMS + an alert in the banking app), runs the R9
+     follow-up actions if rule R9 fired (see r9_followup), and commits ONCE. Any error rolls everything back, so a payment never
      exists without its decision and evidence.
 
 Idempotency: `external_ref` is UNIQUE. A repeated reference fails the INSERT,
@@ -24,18 +26,19 @@ the rule hits as JSON), one UPDATE, one COMMIT.
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pymysql.err import IntegrityError as PyMySQLIntegrityError
 from pymysql.err import OperationalError as PyMySQLOperationalError
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from portal.extensions import db
-from portal.helpers.db_helpers import call_procedure, fetch_all, fetch_one, scalar
+from portal.helpers.db_helpers import call_procedure, execute, fetch_all, fetch_one, scalar, set_actor
 from portal.helpers.explain import inr
 from portal.helpers.responses import AppError
 from portal.helpers.timing import now_ms
 from portal.models import Transaction
+from portal.services import funds
 from portal.services.notifier import get_notifier
 
 DEADLOCK = 1213
@@ -44,8 +47,12 @@ DUPLICATE_ENTRY = 1062
 FOREIGN_KEY_MISSING = 1452
 MAX_ATTEMPTS = 3
 
-# Sources that are bulk/offline and must not message customers.
+# Sources that are bulk/offline and must not message customers (nor run the
+# R9 follow-up actions, which would fill the watchlist with test data).
 SILENT_SOURCES = {"SEED", "EVALUATION"}
+
+R9_HOLD = timedelta(hours=24)
+R9_ACTOR = "r9-engine"
 
 # One line per decision with its latency, written to logs/app.log only
 # (printing every payment to a Windows console would slow the engine down).
@@ -97,6 +104,9 @@ def decision_payload(txn, duplicate=False):
         "status": txn.status,
         "risk_score": txn.risk_score,
         "decision_ms": float(txn.decision_ms) if txn.decision_ms is not None else None,
+        "funds_status": txn.funds_status,
+        "model_score": txn.model_score,
+        "model_points": txn.model_points,
         "total_ms": None,
         "stage_timings": txn.stage_timings,
         "rules": hits,
@@ -121,6 +131,97 @@ def _notify_customer(account_id, txn_id, amount, status):
     )
 
 
+def _r9_reason(txn_id):
+    return f"Rule R9 (OTP scam) fired on payment #{txn_id}"
+
+
+def r9_followup(txn_id, account_id, payee_id, device_id, ip_address, at):
+    """What the bank does once rule R9 fires (specification 4.7), in the same
+    database transaction as the decision:
+
+      1. step-up verification: for 24 hours OTP Shield sends every request
+         from an untrusted device to the registered phone for approval
+         (accounts.step_up_until), and the suspect device is logged out;
+      2. 24-hour cooling-off on the new payee (beneficiaries.cooling_until);
+      3. an alert to the customer on a second channel (app push; the SMS
+         went out in _notify_customer);
+      4. the fraudster's device, IP and the payee account go on the
+         watchlist -- unless the device is one the customer trusts.
+
+    Closing the case as FALSE_POSITIVE undoes 1, 2 and 4 (r9_release).
+    """
+    until = at + R9_HOLD
+    execute("UPDATE accounts SET step_up_until = GREATEST(COALESCE(step_up_until, :u), :u) WHERE id = :a",
+            {"u": until, "a": account_id})
+    trusted = device_id is not None and scalar(
+        "SELECT 1 FROM devices WHERE account_id = :a AND device_id = :d AND is_trusted = 1",
+        {"a": account_id, "d": device_id},
+    )
+    if device_id and not trusted:
+        execute("UPDATE sessions SET is_active = 0 WHERE account_id = :a AND device_id = :d AND is_active = 1",
+                {"a": account_id, "d": device_id})
+
+    payee = None
+    if payee_id:
+        payee = fetch_one("SELECT payee_name, payee_account_no FROM beneficiaries WHERE id = :id", {"id": payee_id})
+        execute("UPDATE beneficiaries SET cooling_until = GREATEST(COALESCE(cooling_until, :u), :u) WHERE id = :id",
+                {"u": until, "id": payee_id})
+
+    entries = [("ACCOUNT", payee["payee_account_no"] if payee else None)]
+    if not trusted:
+        entries += [("DEVICE", device_id), ("IP", ip_address)]
+    set_actor(R9_ACTOR)
+    watchlisted = []
+    for entry_type, value in entries:
+        if value and execute(
+            "INSERT IGNORE INTO watchlist (entry_type, entry_value, reason, added_by, added_at) "
+            "VALUES (:t, :v, :r, :by, :at)",
+            {"t": entry_type, "v": value, "r": _r9_reason(txn_id), "by": R9_ACTOR, "at": at},
+        ).rowcount:
+            watchlisted.append({"entry_type": entry_type, "entry_value": value})
+    set_actor(None)
+
+    customer_id = scalar("SELECT customer_id FROM accounts WHERE id = :id", {"id": account_id})
+    to_whom = f" to {payee['payee_name']}" if payee else ""
+    get_notifier().send(
+        customer_id,
+        "APP",
+        "Security alert: OTP scam stopped",
+        f"We stopped a payment{to_whom} that looks like an OTP scam. For the next 24 hours new devices must be "
+        "approved on this phone" + (" and that payee is on hold" if payee else "") +
+        ". If you did not start it, change your password. The bank never asks for your OTP.",
+        kind="ALERT",
+        ref_id=txn_id,
+    )
+    return {"step_up_until": until.isoformat(), "payee_hold_until": until.isoformat() if payee else None,
+            "watchlisted": watchlisted}
+
+
+def r9_release(txn_id):
+    """Undoes r9_followup when an analyst confirms the payment was genuine."""
+    txn = fetch_one(
+        "SELECT t.account_id, t.beneficiary_id FROM transactions t "
+        "JOIN rule_hits rh ON rh.txn_id = t.id AND rh.rule_code = 'R9' WHERE t.id = :id",
+        {"id": txn_id},
+    )
+    if txn is None:
+        return 0
+    removed = execute("DELETE FROM watchlist WHERE added_by = :by AND reason = :r",
+                      {"by": R9_ACTOR, "r": _r9_reason(txn_id)}).rowcount
+    execute("UPDATE accounts SET step_up_until = NULL WHERE id = :a", {"a": txn["account_id"]})
+    if txn["beneficiary_id"]:
+        execute("UPDATE beneficiaries SET cooling_until = NULL WHERE id = :id", {"id": txn["beneficiary_id"]})
+    return removed
+
+
+def _payee_label(row):
+    if row.get("beneficiary_id"):
+        return scalar("SELECT payee_name FROM beneficiaries WHERE id = :id", {"id": row["beneficiary_id"]})
+    if row.get("merchant_id"):
+        return scalar("SELECT name FROM merchants WHERE id = :id", {"id": row["merchant_id"]})
+    return None
+
+
 def _ingest_once(payload, source, t_received):
     timings = {}
     account_id = _account_id(payload)
@@ -139,6 +240,7 @@ def _ingest_once(payload, source, t_received):
         "device_id": payload.get("device_id"),
         "ip_address": payload.get("ip_address"),
         "txn_time": payload.get("txn_time") or datetime.now(),
+        "model_score": payload.get("model_score"),
         "risk_score": 0,
         "status": "PENDING",
         "is_fraud_label": payload.get("is_fraud_label"),
@@ -162,9 +264,20 @@ def _ingest_once(payload, source, t_received):
         _txn_table.update().where(_txn_table.c.id == txn_id).values(decision_ms=decision_ms, stage_timings=timings)
     )
     status = result["status"]
+    funds_status = funds.settle_decision(account_id, txn_id, row["amount"], status, row["source"])
+    followup = None
     if status != "APPROVED" and row["source"] not in SILENT_SOURCES:
+        from portal.services.customer_care import create_decision_alert
+
         _notify_customer(account_id, txn_id, row["amount"], status)
+        create_decision_alert(txn_id, account_id, row["amount"], status, _payee_label(row))
+        if any(h["rule_code"] == "R9" for h in hits):
+            followup = r9_followup(txn_id, account_id, row["beneficiary_id"], row["device_id"],
+                                   row["ip_address"], row["txn_time"])
     db.session.commit()
+    # Request receipt -> COMMITTED decision: the latency the specification
+    # measures (decision_ms, stored in the row, is taken just before the commit).
+    committed_ms = round(now_ms() - t_received, 2)
 
     decision = {
         "txn_id": txn_id,
@@ -173,17 +286,21 @@ def _ingest_once(payload, source, t_received):
         "amount": float(row["amount"]),
         "status": status,
         "risk_score": int(result["risk_score"]),
+        "model_score": row["model_score"],
+        "model_points": result["model_points"],
         "decision_ms": decision_ms,
-        "total_ms": round(now_ms() - t_received, 2),
+        "funds_status": funds_status,
+        "total_ms": committed_ms,
         "stage_timings": timings,
         "rules": hits,
         "alert_id": result["alert_id"],
         "duplicate": False,
+        "r9_followup": followup,
     }
     decision_log.info(
-        "txn %s (%s) -> %s score=%s rules=%s decided in %.1f ms",
+        "txn %s (%s) -> %s score=%s rules=%s decided in %.1f ms, committed in %.1f ms",
         txn_id, row["external_ref"], status, decision["risk_score"],
-        ",".join(h["rule_code"] for h in hits) or "-", decision_ms,
+        ",".join(h["rule_code"] for h in hits) or "-", decision_ms, committed_ms,
     )
     return decision
 

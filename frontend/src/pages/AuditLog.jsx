@@ -1,4 +1,4 @@
-import { ScrollText, Search } from 'lucide-react';
+import { ScrollText, Search, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { errorMessage } from '../api/client';
@@ -19,6 +19,33 @@ function changes(row) {
   }
   const v = n || o;
   return v ? Object.entries(v).map(([k, val]) => `${k.replace(/_/g, ' ')}: ${val}`).join(', ') : '';
+}
+
+function ChainStatus() {
+  const [res, setRes] = useState(null);
+  const check = useCallback(() => auditApi.verify().then(setRes).catch((err) => toast.error(errorMessage(err))), []);
+  useEffect(() => {
+    check();
+  }, [check]);
+  if (!res) return null;
+  const Icon = res.intact ? ShieldCheck : ShieldAlert;
+  return (
+    <div
+      className={`mb-4 flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 text-sm ${
+        res.intact ? 'border-approved/30 bg-approved-soft text-approved' : 'border-blocked/30 bg-blocked-soft text-blocked'
+      }`}
+    >
+      <Icon className="h-5 w-5 shrink-0" aria-hidden />
+      <span className="flex-1">
+        {res.intact
+          ? `Tamper check passed: all ${res.rows.toLocaleString('en-IN')} entries are linked by an unbroken SHA-256 hash chain, so none was changed or removed.`
+          : `Tamper check FAILED: ${res.problem}`}
+      </span>
+      <button type="button" className="text-xs font-medium underline" onClick={check}>
+        Check again
+      </button>
+    </div>
+  );
 }
 
 export default function AuditLog() {
@@ -52,6 +79,7 @@ export default function AuditLog() {
       title="Audit log"
       subtitle="Every change to rules, the watchlist, cases and users — who did it and when. Rule, watchlist and case changes are recorded by database triggers, so nothing slips through."
     >
+      <ChainStatus />
       <Card bodyClass="p-4">
         <div className="mb-4 flex flex-col gap-2 sm:flex-row">
           <select className="input sm:w-56" value={entity} onChange={(e) => { setEntity(e.target.value); setPage(1); }} aria-label="Filter by area">

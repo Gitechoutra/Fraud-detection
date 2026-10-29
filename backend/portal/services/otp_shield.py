@@ -206,14 +206,10 @@ def execute_payment(otp_req, device_id, ip_address=None, city=None):
         },
         source="BANK_DEMO",
     )
+    # The fraud engine moved (or held) the money with its decision.
     db.session.execute(
         text("UPDATE otp_requests SET txn_id = :t WHERE id = :o"), {"t": result["txn_id"], "o": otp_req.id}
     )
-    if result["status"] == "APPROVED" and not result["duplicate"]:
-        db.session.execute(
-            text("UPDATE accounts SET balance = GREATEST(0, balance - :a) WHERE id = :id"),
-            {"a": otp_req.amount, "id": otp_req.account_id},
-        )
     db.session.commit()
     return result
 
@@ -251,6 +247,7 @@ def verify_otp(otp_request_id, otp, device_id, account_id=None, ip_address=None,
     otp_req.final_status = "VERIFIED"
     otp_req.verified_at = now
     otp_req.verified_device_id = device_id
+    otp_req.verified_ip = ip_address
     _log_session(otp_req.account_id, "OTP_VERIFY", device_id, ip_address, city, now)
     db.session.commit()
     payment = execute_payment(otp_req, device_id, ip_address, city)

@@ -21,6 +21,9 @@ class FraudRule(db.Model):
     param_4 = db.Column(MONEY)
     param_labels = db.Column(db.JSON)
     weight = db.Column(db.SmallInteger, nullable=False)
+    # The starting weight from the specification (Table 4.4), kept beside
+    # the tuned `weight` so the change stays traceable.
+    spec_weight = db.Column(db.SmallInteger)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     sort_order = db.Column(db.SmallInteger, nullable=False, default=0)
     updated_by = db.Column(db.String(64))
@@ -42,6 +45,7 @@ class FraudRule(db.Model):
             "params": self.params(),
             "param_labels": self.param_labels or [],
             "weight": self.weight,
+            "spec_weight": self.spec_weight,
             "is_active": self.is_active,
             "updated_by": self.updated_by,
             "updated_at": iso(self.updated_at),

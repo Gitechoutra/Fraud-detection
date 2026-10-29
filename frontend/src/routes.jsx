@@ -16,12 +16,19 @@ const Watchlist = lazy(() => import('./pages/Watchlist'));
 const AuditLog = lazy(() => import('./pages/AuditLog'));
 const Users = lazy(() => import('./pages/Users'));
 const NotFound = lazy(() => import('./pages/NotFound'));
+const BankApp = lazy(() => import('./pages/BankApp'));
+const Attacker = lazy(() => import('./pages/Attacker'));
+const DemoSplit = lazy(() => import('./pages/DemoSplit'));
 
 export function buildRoutes() {
   const guard = (role, el) => <RequireRole role={role}>{el}</RequireRole>;
   return [
     { path: '/', element: <Landing /> },
     { path: '/login', element: <Login /> },
+    // Customer app and fraudster console use their own logins, not the staff one.
+    { path: '/bank', element: <BankApp /> },
+    { path: '/attacker', element: <Attacker /> },
+    { path: '/demo', element: <DemoSplit /> },
     {
       path: '/app',
       element: <AppLayout />,

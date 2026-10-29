@@ -5,6 +5,8 @@
 -- database itself, so they are captured no matter which code path made them.
 -- The app sets the session variable @app_actor to the logged-in username;
 -- if it is not set we fall back to the MySQL user.
+--
+-- The audit log itself is made tamper-evident in 06_audit_chain.sql.
 -- ===========================================================================
 
 DROP TRIGGER IF EXISTS trg_fraud_rules_audit_update;
@@ -71,11 +73,17 @@ BEGIN
     INSERT INTO audit_log (actor, action, entity, entity_id, old_value, new_value, logged_at)
     VALUES (
         COALESCE(@app_actor, CURRENT_USER()),
-        IF(NEW.outcome IS NOT NULL AND OLD.outcome IS NULL, 'CASE_CLOSED', 'CASE_UPDATED'),
+        CASE
+            WHEN NEW.outcome IS NOT NULL AND OLD.outcome IS NULL THEN 'CASE_CLOSED'
+            WHEN NOT (NEW.customer_response <=> OLD.customer_response) THEN 'CUSTOMER_RESPONDED'
+            ELSE 'CASE_UPDATED'
+        END,
         'cases',
         CAST(NEW.id AS CHAR),
-        JSON_OBJECT('outcome', OLD.outcome, 'analyst_id', OLD.analyst_id, 'closed_at', OLD.closed_at),
-        JSON_OBJECT('outcome', NEW.outcome, 'analyst_id', NEW.analyst_id, 'closed_at', NEW.closed_at),
+        JSON_OBJECT('outcome', OLD.outcome, 'analyst_id', OLD.analyst_id, 'closed_at', OLD.closed_at,
+                    'customer_response', OLD.customer_response),
+        JSON_OBJECT('outcome', NEW.outcome, 'analyst_id', NEW.analyst_id, 'closed_at', NEW.closed_at,
+                    'customer_response', NEW.customer_response),
         NOW(3)
     );
 END$$
