@@ -19,7 +19,7 @@ flowchart LR
         Sched["scheduler.py<br/>APScheduler"]
     end
 
-    subgraph MySQL["MySQL 8 · fraud_sql"]
+    subgraph MySQL["MySQL 8 · fraude"]
         SP1[["sp_evaluate_transaction<br/>rules R1–R9, score, decide, alert"]]
         SP2[["sp_otp_risk_check<br/>R9-A risk points"]]
         Tables[("transactions · rule_hits · alerts · cases<br/>accounts · devices · sessions · beneficiaries<br/>fraud_rules · watchlist · otp_requests …")]

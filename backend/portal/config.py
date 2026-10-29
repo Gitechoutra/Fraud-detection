@@ -29,7 +29,7 @@ def build_db_url(db_name=None, include_db=True):
     password = quote_plus(env("DB_PASSWORD", ""))
     host = env("DB_HOST", "127.0.0.1")
     port = env("DB_PORT", "3306")
-    name = db_name or env("DB_NAME", "fraud_sql")
+    name = db_name or env("DB_NAME", "fraude")
     path = f"/{name}" if include_db else "/"
     return f"mysql+pymysql://{user}:{password}@{host}:{port}{path}?charset=utf8mb4"
 
@@ -45,7 +45,7 @@ class BaseConfig:
     JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=7)
     JWT_TOKEN_LOCATION = ["headers"]
 
-    DB_NAME = env("DB_NAME", "fraud_sql")
+    DB_NAME = env("DB_NAME", "fraude")
     SQLALCHEMY_DATABASE_URI = build_db_url(DB_NAME)
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     # No pre-ping on every checkout (it costs a round trip per payment);
@@ -92,7 +92,7 @@ class DevelopmentConfig(BaseConfig):
 class TestingConfig(BaseConfig):
     ENV_NAME = "testing"
     TESTING = True
-    DB_NAME = env("DB_TEST_NAME", "fraud_sql_test")
+    DB_NAME = env("DB_TEST_NAME", "fraude_test")
     SQLALCHEMY_DATABASE_URI = build_db_url(DB_NAME)
     RATELIMIT_ENABLED = False
     SCHEDULER_ENABLED = False

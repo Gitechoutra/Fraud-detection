@@ -1,11 +1,11 @@
 """
 Test setup.
 
-The suite runs against the separate DB_TEST_NAME database (fraud_sql_test).
-It is dropped and rebuilt once per run -- tables, SQL objects, roles, users,
+The suite runs against the separate DB_TEST_NAME database (fraude_test).
+It is created fresh at the start of each run and dropped at the end -- tables, SQL objects, roles, users,
 rules, merchants and watchlist -- and every test starts from that baseline:
 dynamic tables are emptied and the rules reset before each test. The main
-fraud_sql database is never touched.
+fraude database is never touched.
 """
 
 import os
@@ -44,12 +44,8 @@ def app():
     app = create_app("testing")
     name = app.config["DB_NAME"]
     assert name.endswith("_test"), "Refusing to run tests against a non-test database"
-    conn = pymysql.connect(host=env("DB_HOST", "127.0.0.1"), port=int(env("DB_PORT", "3306")),
-                           user=env("DB_USER", "root"), password=env("DB_PASSWORD", ""))
-    with conn.cursor() as cur:
-        cur.execute(f"DROP DATABASE IF EXISTS `{name}`")
-        cur.execute(f"CREATE DATABASE `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-    conn.close()
+    _server_exec(f"DROP DATABASE IF EXISTS `{name}`",
+                 f"CREATE DATABASE `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
     with app.app_context():
         db.create_all()
         load_sql_objects(log=quiet)
@@ -59,6 +55,19 @@ def app():
     with app.app_context():
         db.session.remove()
         db.engine.dispose()
+    # Drop the throwaway test database so only the app database stays on the server.
+    _server_exec(f"DROP DATABASE IF EXISTS `{name}`")
+
+
+def _server_exec(*statements):
+    conn = pymysql.connect(host=env("DB_HOST", "127.0.0.1"), port=int(env("DB_PORT", "3306")),
+                           user=env("DB_USER", "root"), password=env("DB_PASSWORD", ""))
+    try:
+        with conn.cursor() as cur:
+            for sql in statements:
+                cur.execute(sql)
+    finally:
+        conn.close()
 
 
 @pytest.fixture(autouse=True)

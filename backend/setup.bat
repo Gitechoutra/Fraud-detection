@@ -1,7 +1,7 @@
 @echo off
 REM ==========================================================================
 REM  FraudShield - one-time setup (Windows)
-REM  Creates the Python venv, installs packages, creates the MySQL databases,
+REM  Creates the Python venv, installs packages, creates the MySQL database,
 REM  builds all tables / views / triggers / stored procedures, loads the demo
 REM  data, and installs the frontend packages.
 REM  Safe to run again: every step skips what already exists.
@@ -53,7 +53,7 @@ if not exist .env (
 echo [3/7] Settings found in .env
 
 REM -- 4. Databases ---------------------------------------------------------
-echo [4/7] Creating databases fraud_sql and fraud_sql_test (if missing)...
+echo [4/7] Creating database fraude (if missing)...
 flask create-db || goto :dbfail
 
 REM -- 5. Tables, indexes, views, triggers, procedures ----------------------

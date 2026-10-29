@@ -11,7 +11,7 @@ services:
     image: mysql:8.0
     environment:
       MYSQL_ROOT_PASSWORD: ${DOCKER_DB_PASSWORD:-fraudshield-local}
-      MYSQL_DATABASE: fraud_sql
+      MYSQL_DATABASE: fraude
       TZ: Asia/Kolkata
     command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
     volumes:
@@ -21,8 +21,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 30
-    # No host port: only the backend container talks to this MySQL, so it can
-    # never clash with a local MySQL on 3306.
+    
 
   backend:
     build: ./backend
@@ -35,7 +34,7 @@ services:
       DB_PORT: "3306"
       DB_USER: root
       DB_PASSWORD: ${DOCKER_DB_PASSWORD:-fraudshield-local}
-      DB_NAME: fraud_sql
+      DB_NAME: fraude
       FRONTEND_ORIGIN: http://localhost:8080
       TZ: Asia/Kolkata
     depends_on:

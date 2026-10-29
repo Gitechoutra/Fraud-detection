@@ -3,7 +3,7 @@ portal/cli.py
 =============
 Flask CLI commands (run from backend/ with the venv active):
 
-    flask create-db          create fraud_sql and fraud_sql_test if missing
+    flask create-db          create the fraude database if missing
     flask init-db-objects    load portal/sql/*.sql (indexes, views, triggers, procedures)
     flask seed               load all demo data (idempotent)
     flask export-master-data snapshot this DB so teammates get it on `flask db upgrade`
@@ -24,11 +24,12 @@ from portal.extensions import db
 def register_cli(app):
     @app.cli.command("create-db")
     def create_db_command():
-        """Create the main and test databases if they do not exist."""
+        """Create the app database if it does not exist. The test suite
+        creates (and drops) its own DB_TEST_NAME database."""
         from portal.config import env
         from portal.helpers.db_helpers import create_databases
 
-        names = [env("DB_NAME", "fraud_sql"), env("DB_TEST_NAME", "fraud_sql_test")]
+        names = [env("DB_NAME", "fraude")]
         create_databases(names, env("DB_HOST", "127.0.0.1"), env("DB_PORT", "3306"),
                          env("DB_USER", "root"), env("DB_PASSWORD", ""))
         click.echo(f"Databases ready: {', '.join(names)}")

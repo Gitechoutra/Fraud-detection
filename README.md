@@ -39,7 +39,7 @@ warning sign.
    password itself. (If `.env` doesn't exist yet, `setup.bat` creates it from `.env.example`.)
 2. Double-click **`backend\setup.bat`**. It:
    - creates a Python virtual environment and installs the packages,
-   - creates the databases **`fraud_sql`** and **`fraud_sql_test`** (no `mysql` command needed),
+   - creates the database **`fraude`** (no `mysql` command needed),
    - builds all tables, indexes, views, triggers and both stored procedures,
    - loads the demo data: 3 staff users, the 9 rules, 200 customers with ~270 accounts,
      60 shops, a watchlist, 90 days of payment history (~27,000 payments), labelled fraud
@@ -123,7 +123,7 @@ From the `backend` folder with the virtual environment active (`venv\Scripts\act
 
 | Command | Does |
 |---|---|
-| `flask create-db` | Create `fraud_sql` and `fraud_sql_test` if missing |
+| `flask create-db` | Create the `fraude` database if missing |
 | `flask db upgrade` | Create/upgrade tables **and** load all SQL objects |
 | `flask init-db-objects` | (Re)load indexes, views, triggers and stored procedures |
 | `flask show-db-objects` | List procedures, functions, triggers and views |
@@ -134,14 +134,14 @@ From the `backend` folder with the virtual environment active (`venv\Scripts\act
 | `flask simulate-scenario R3` | Run one fraud story and print the decision |
 | `python simulate.py --rate 5 --fraud-ratio 0.03 --minutes 2` | Stream payments to the running API |
 | `python evaluate.py` | Evaluate 5,000 labelled payments through the running API |
-| `python -m pytest` | Run the test suite (uses `fraud_sql_test`, never touches `fraud_sql`) |
+| `python -m pytest` | Run the test suite (uses a temporary `fraude_test` database that it drops when done; never touches `fraude`) |
 | `python -m pytest --cov=portal` | …with coverage |
 | `python app.py` | API with auto-reload (development) |
 | `python wsgi.py` | API with Waitress (what `start_backend.bat` runs) |
 
 ### Sharing your data with the team
 
-The data in your `fraud_sql` (customers, merchants, watchlist, rule settings, payments, alerts,
+The data in your `fraude` (customers, merchants, watchlist, rule settings, payments, alerts,
 cases) travels through git:
 
 1. **You:** `flask export-master-data`, then commit `backend/portal/master_data/` and
@@ -168,7 +168,7 @@ other.
 | Strange characters (`â‚¹`) in a console window | Cosmetic only. The scripts switch the console to UTF-8; in your own window run `chcp 65001`. |
 | OTP Shield says “Too many OTP requests” | Press **Replay story** — it resets Ravi's demo data, including the 5-per-10-minutes OTP limit. |
 | I changed rules and want the defaults back | `flask reset-rules` |
-| Start completely fresh | In MySQL Workbench: `DROP DATABASE fraud_sql;` then run `setup.bat` again. |
+| Start completely fresh | In MySQL Workbench: `DROP DATABASE fraude;` then run `setup.bat` again. |
 
 ## 8. Decisions made while building
 
