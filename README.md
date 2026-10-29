@@ -129,6 +129,8 @@ From the `backend` folder with the virtual environment active (`venv\Scripts\act
 | `flask show-db-objects` | List procedures, functions, triggers and views |
 | `flask seed` | Load demo data (safe to repeat) |
 | `flask reset-rules` | Put rule limits and points back to the defaults |
+| `flask export-master-data` | Snapshot your database so teammates get it on `flask db upgrade` (see below) |
+| `flask load-master-data --replace` | Make this database an exact copy of the snapshot (deletes its rows first) |
 | `flask simulate-scenario R3` | Run one fraud story and print the decision |
 | `python simulate.py --rate 5 --fraud-ratio 0.03 --minutes 2` | Stream payments to the running API |
 | `python evaluate.py` | Evaluate 5,000 labelled payments through the running API |
@@ -136,6 +138,23 @@ From the `backend` folder with the virtual environment active (`venv\Scripts\act
 | `python -m pytest --cov=portal` | …with coverage |
 | `python app.py` | API with auto-reload (development) |
 | `python wsgi.py` | API with Waitress (what `start_backend.bat` runs) |
+
+### Sharing your data with the team
+
+The data in your `fraud_sql` (customers, merchants, watchlist, rule settings, payments, alerts,
+cases) travels through git:
+
+1. **You:** `flask export-master-data`, then commit `backend/portal/master_data/` and
+   `backend/migrations/versions/` and push. Add `--master-only` to share only reference data
+   (no payments, alerts or cases).
+2. **Teammates:** `git pull`, then `flask db upgrade`. The new migration loads the snapshot.
+
+Staff passwords, login sessions and the audit log are not shared; staff logins get their passwords
+from each person's own `.env`. Loading adds and updates rows by ID, so it is exact on an empty
+database. If a teammate's database already has different data, they run
+`flask load-master-data --replace` for an exact copy. If two people export at the same time,
+`flask db upgrade` reports "multiple heads"; keep the newest snapshot migration and delete the
+other.
 
 ## 7. Troubleshooting
 
