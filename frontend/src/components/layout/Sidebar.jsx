@@ -3,6 +3,8 @@ import { AnimatePresence, motion } from 'framer-motion';
 import {
   Activity,
   Bell,
+  Columns2,
+  ExternalLink,
   FlaskConical,
   Gauge,
   LayoutDashboard,
@@ -10,7 +12,9 @@ import {
   Menu,
   ScrollText,
   ShieldCheck,
+  Skull,
   SlidersHorizontal,
+  Smartphone,
   Users,
   X,
 } from 'lucide-react';
@@ -30,6 +34,37 @@ export const NAV = [
   { to: '/app/audit', label: 'Audit log', icon: ScrollText, role: 'RISK_MANAGER' },
   { to: '/app/users', label: 'Users', icon: Users, role: 'ADMIN' },
 ];
+
+// The customer-facing pages live outside the staff app; they open in a new
+// tab so the staff view (Live Monitor, Alerts) stays open beside them.
+const DEMO_APPS = [
+  { to: '/bank', label: 'Customer bank app', icon: Smartphone },
+  { to: '/attacker', label: 'Fraudster console', icon: Skull },
+  { to: '/demo', label: 'Side-by-side demo', icon: Columns2 },
+];
+
+function DemoLinks() {
+  return (
+    <div className="mt-6">
+      <p className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">Demo apps</p>
+      <nav className="space-y-1" aria-label="Demo apps">
+        {DEMO_APPS.map(({ to, label, icon: Icon }) => (
+          <a
+            key={to}
+            href={to}
+            target="_blank"
+            rel="noreferrer"
+            className="group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted transition hover:bg-surface2 hover:text-ink"
+          >
+            <Icon className="h-[18px] w-[18px]" aria-hidden />
+            <span className="flex-1">{label}</span>
+            <ExternalLink className="h-3.5 w-3.5 opacity-0 transition group-hover:opacity-100" aria-hidden />
+          </a>
+        ))}
+      </nav>
+    </div>
+  );
+}
 
 function Brand() {
   return (
@@ -81,6 +116,7 @@ export default function Sidebar() {
         <Brand />
         <div className="mt-8 flex-1 overflow-y-auto">
           <NavItems items={items} />
+          <DemoLinks />
         </div>
         <p className="px-3 text-[11px] text-muted">Rules run inside MySQL · decisions in milliseconds</p>
       </aside>
@@ -129,6 +165,7 @@ export default function Sidebar() {
               </div>
               <div className="mt-8">
                 <NavItems items={items} onNavigate={() => setOpen(false)} />
+                <DemoLinks />
               </div>
             </motion.aside>
           </motion.div>
